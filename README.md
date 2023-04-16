@@ -1,4 +1,4 @@
-# VA-S-BOT
+# VA'S-BOT
 A Moderation Bot for Discord
 <b>ONLY FOR WINDOWS!</b>
 # How to download
