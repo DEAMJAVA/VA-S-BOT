@@ -1,14 +1,24 @@
+current_version = 'V2.0'
+
 import discord
 import json
 import os
 import tkinter as tk
 import youtube_dl
+import requests
+import numpy as np
+import tensorflow as tf
+import io
+import openai
 
+from PIL import Image
+from github import Github
 from discord import Status
 from tkinter import messagebox
 from discord.ext import commands
 from discord.utils import get
 from youtube_search import YoutubeSearch
+from io import BytesIO
 
 # Load or save bot configuration from BotConfig.json file
 
@@ -28,7 +38,8 @@ if not os.path.isfile('BotConfig.json'):
         'owner_id': INPUT_OWNER_ID,
         'owner_name': INPUT_OWNER_NAME,
         'mod_role': INPUT_MOD_ROLE_NAME,
-        'owner_role': INPUT_OWNER_ROLE_NAME
+        'owner_role': INPUT_OWNER_ROLE_NAME,
+        'imagine_enabled': 'False'
     }
     with open('BotConfig.json', 'w') as f:
         f.write(json.dumps(config, indent=4, ensure_ascii=False, separators=(',', ': ')) + '\n')
@@ -198,13 +209,13 @@ else:
             await bot.change_presence(activity=None)
             await ctx.send("Status cleared.")
         except Exception as e:
-            await ctx.send(f'An error occured: {e}')
+            await ctx.send('An error occured: {e}')
     @bot.command()
     @has_required_perm()
     async def setnickname(ctx, member: discord.Member, *, new_nickname: str):
         try:
             await member.edit(nick=new_nickname)
-            await ctx.send("Nickname has been changed to {new_nickname}.")
+            await ctx.send(f"Nickname has been changed to {new_nickname}.")
         except Exception as e:
             await ctx.send(f'An error occured: {e}')
     @bot.command()
@@ -214,6 +225,56 @@ else:
             await ctx.send(f"My nickname has been changed to {new_name}")
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
+    @bot.command()
+    async def imagine(ctx, keyword=None):
+        if config['imagine_enabled'] == True:
+            try:
+                 if not keyword:
+                    await ctx.send('Please provide a keyword to imagine!')
+                    return
+                 image_url = get_random_image(keyword)
+                 await ctx.send(f'Here is an image of {keyword} that I imagined:\n{image_url}')
+            except Exception as e:
+                await ctx.send(f"An error occurred: {e}")
+        else:
+            await ctx.send("Sorry, the imagine command is currently disabled.")
+
+    @bot.command()
+    @commands.has_role(config['owner_role'])
+    async def enable_imagine(ctx):
+        config['imagine_enabled'] = True
+        with open('BotConfig.json', 'w') as f:
+            json.dump(config, f)
+        await ctx.send("The imagine command has been enabled.")
+
+    @bot.command()
+    @commands.has_role(config['owner_role'])
+    async def disable_imagine(ctx):
+        config['imagine_enabled'] = False
+        with open('config.json', 'w') as f:
+            json.dump(config, f)
+        await ctx.send("The imagine command has been disabled.")
+
+
+
+    openai.api_key = "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"
+    
+
+    @bot.command()
+    async def gen(ctx, *, text):
+        response = openai.Completion.create(
+            prompt=text,
+            num_images=1,
+            size="256x256",
+            response_format="url"
+        )
+        image_url = response.choices[0].text
+        embed = discord.Embed()
+        embed.set_image(url=image_url)
+
+        await ctx.send(embed=embed)
+
+
 
 
 
@@ -240,15 +301,45 @@ else:
         `mute <member>` - Mute a member in the server.
         `shutdown` - Shut down the bot.
         `h` - Show this help message.
-        `status` - sets status.
-        `set_status` - sets custom status.
+        `set_status <value>` - sets custom status.
         `clear_status` - Sets to default status
-        `setnickname` - Changes nickname of other members
-        `nickname` - Sets custom nickname 
+        `setnickname <member>` - Changes nickname of other members
+        `nickname <name>` - Sets custom nickname 
         And add "''' + prefix + '" Before any of the commands Example "' + prefix +
         """h" """ + f"""For More Info Contact <@{owner.id}>""")
 
         await ctx.send(help_msg)
+
+
+
+
+
+
+    # Set your Github access token as an environment variable
+    ACCESS_TOKEN = os.environ.get('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')
+    # Set the repository name and owner
+    REPO_NAME = 'VA-S-BOT'
+    REPO_OWNER = 'DEAMJAVA'
+
+    def check_for_updates():
+        # Authenticate with Github using your access token
+        g = Github(ACCESS_TOKEN)
+        repo = g.get_repo(f'{REPO_OWNER}/{REPO_NAME}')
+        
+        # Get the latest release from the releases tag
+        latest_release = repo.get_latest_release()
+        
+        # Compare the latest release version with the current version
+        m = f"New version {latest_release.tag_name} available! \nDownload URL: {latest_release.html_url}"
+        
+        if latest_release.tag_name >= current_version:
+            print(f'New version {latest_release.tag_name} available!')
+            print(f'Download URL: {latest_release.html_url}')
+            messagebox.showinfo(title="Va's BOT", message=m, icon=messagebox.INFO)
+
+
+
+    check_for_updates()    
 
     # Start the bot
     bot.run(config['bot_token'])
