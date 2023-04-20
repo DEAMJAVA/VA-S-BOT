@@ -1,4 +1,4 @@
-current_version = 'V2.0'
+current_version = 'V2.4'
 
 import discord
 import json
@@ -6,19 +6,14 @@ import os
 import tkinter as tk
 import youtube_dl
 import requests
-import numpy as np
-import tensorflow as tf
 import io
 import openai
 
-from PIL import Image
 from github import Github
 from discord import Status
 from tkinter import messagebox
 from discord.ext import commands
 from discord.utils import get
-from youtube_search import YoutubeSearch
-from io import BytesIO
 
 # Load or save bot configuration from BotConfig.json file
 
@@ -58,12 +53,15 @@ else:
 
     def has_required_perm():
         async def predicate(ctx):
-            required_role_name = config['mod_role'] 
-            required_role = discord.utils.get(ctx.guild.roles, name=required_role_name)
+            try:
+                required_role_name = config['mod_role'] 
+                required_role = discord.utils.get(ctx.guild.roles, name=required_role_name)
 
-            if required_role not in ctx.author.roles:
-                await ctx.send("You don't have the required permision to execute this command!")
-                return False
+                if required_role not in ctx.author.roles:
+                    await ctx.send("You don't have the required permision to execute this command!")
+                    return False
+            except Exception as e:
+                await ctx.send(f'An error occured: {e}')
 
             return True
 
@@ -74,16 +72,38 @@ else:
 
     def has_owner_perm():
         async def predicate(ctx):
-            required_role_name = config['owner_role'] 
-            required_role = discord.utils.get(ctx.guild.roles, name=required_role_name)
+            owner_role_name = config['owner_role']
+            owner_role = discord.utils.get(ctx.guild.roles, name=owner_role_name)
+            owner_id = config['owner_id']
 
-            if required_role not in ctx.author.roles:
-                await ctx.send("You don't have the required permision to execute this command!")
-                return False
+            print(f'Author ID: {ctx.author.id}')
+            print(f'Owner ID: {owner_id}')
 
+            if owner_role not in ctx.author.roles:
+                y= 'No'
+            else:
+                y= 'Yes'
+
+            print(f'does Author has Owner role: {y}')
+
+            if str(owner_id) != str(ctx.author.id) and owner_role not in ctx.author.roles:
+                    await ctx.send("You don't have the required permission to execute this command!")
+                    return False
             return True
 
+
         return commands.check(predicate)
+    @bot.command()
+    async def about_me(ctx):
+        try:
+            roles = ctx.author.roles
+            Id = ctx.author.id
+            message = (f'''
+            roles: {roles}
+            ID: {Id}''')
+            await ctx.send(message)
+        except Exception as e:
+            await ctx.send(f"An error occurred: {e}")
 
     # Setup bot events
     @bot.event
@@ -135,24 +155,35 @@ else:
 
     @bot.command()
     @has_required_perm()
-    async def mute(ctx, member: discord.Member):
+    async def mute(ctx, member: discord.Member, *, reason=None):
+        guild = ctx.guild
         try:
-            muted_role_name = 'Muted'
-            muted_role = discord.utils.get(ctx.guild.roles, name=muted_role_name)
-
-            if muted_role is None:
-                # Create the muted role if it doesn't exist
-                muted_role = await ctx.guild.create_role(name=muted_role_name)
-
-                for channel in ctx.guild.channels:
-                    # Deny send messages permission to the muted role for all channels
-                    await channel.set_permissions(muted_role, send_messages=False)
-
-                # Add the muted role to the member
-                await member.add_roles(muted_role)
-                await ctx.send(f'{member.mention} has been muted.')
+            # Create a mute role if it doesn't already exist
+            mute_role = discord.utils.get(guild.roles, name="Muted")
+            if not mute_role:
+                permissions = discord.Permissions(send_messages=False, speak=False)
+                mute_role = await guild.create_role(name="Muted", permissions=permissions)
+                
+                for channel in guild.channels:
+                    await channel.set_permissions(mute_role, send_messages=False, speak=False)
+            
+            # Add the mute role to the member
+            await member.add_roles(mute_role, reason=reason)
+            await ctx.send(f"{member.mention} has been muted.")
         except Exception as e:
             await ctx.send(f'An error occured: {e}')
+    @bot.command()
+    @has_required_perm()
+    async def unmute(ctx, member: discord.Member, *, reason=None):
+        guild = ctx.guild
+        try:
+            muted_role = discord.utils.get(guild.roles, name='Muted')
+            await member.remove_roles(muted_role)
+            await ctx.send(f"{member.mention} has been unmuted.")
+        except Exception as e:
+            await ctx.send(f'An error occured: {e}')
+
+        
     @bot.command()
     @has_owner_perm()
     async def shutdown(ctx):
@@ -225,54 +256,10 @@ else:
             await ctx.send(f"My nickname has been changed to {new_name}")
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
-    @bot.command()
-    async def imagine(ctx, keyword=None):
-        if config['imagine_enabled'] == True:
-            try:
-                 if not keyword:
-                    await ctx.send('Please provide a keyword to imagine!')
-                    return
-                 image_url = get_random_image(keyword)
-                 await ctx.send(f'Here is an image of {keyword} that I imagined:\n{image_url}')
-            except Exception as e:
-                await ctx.send(f"An error occurred: {e}")
-        else:
-            await ctx.send("Sorry, the imagine command is currently disabled.")
-
-    @bot.command()
-    @commands.has_role(config['owner_role'])
-    async def enable_imagine(ctx):
-        config['imagine_enabled'] = True
-        with open('BotConfig.json', 'w') as f:
-            json.dump(config, f)
-        await ctx.send("The imagine command has been enabled.")
-
-    @bot.command()
-    @commands.has_role(config['owner_role'])
-    async def disable_imagine(ctx):
-        config['imagine_enabled'] = False
-        with open('config.json', 'w') as f:
-            json.dump(config, f)
-        await ctx.send("The imagine command has been disabled.")
 
 
 
-    openai.api_key = "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"
     
-
-    @bot.command()
-    async def gen(ctx, *, text):
-        response = openai.Completion.create(
-            prompt=text,
-            num_images=1,
-            size="256x256",
-            response_format="url"
-        )
-        image_url = response.choices[0].text
-        embed = discord.Embed()
-        embed.set_image(url=image_url)
-
-        await ctx.send(embed=embed)
 
 
 
@@ -332,7 +319,7 @@ else:
         # Compare the latest release version with the current version
         m = f"New version {latest_release.tag_name} available! \nDownload URL: {latest_release.html_url}"
         
-        if latest_release.tag_name >= current_version:
+        if latest_release.tag_name > current_version:
             print(f'New version {latest_release.tag_name} available!')
             print(f'Download URL: {latest_release.html_url}')
             messagebox.showinfo(title="Va's BOT", message=m, icon=messagebox.INFO)
