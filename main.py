@@ -1,4 +1,4 @@
-current_version = 'V2.4'
+current_version = 'V4.0'
 
 import discord
 import json
@@ -8,6 +8,7 @@ import youtube_dl
 import requests
 import io
 import openai
+import random as rand
 
 from github import Github
 from discord import Status
@@ -24,8 +25,13 @@ if not os.path.isfile('BotConfig.json'):
     INPUT_WELCOME_CHANNEL_ID= input('\nEnter welcome channel ID \n')
     INPUT_OWNER_ID= input("\nEnter owner's ID\n")
     INPUT_OWNER_NAME= input("\nEnter owner's name\n")
-    INPUT_MOD_ROLE_NAME= input("\nEnter MOD role name\n")
     INPUT_OWNER_ROLE_NAME= input("\nEnter owner role name\n")
+    INPUT_MOD_ROLE_NAME= input("\nEnter MOD role name\n")
+    QUESTION = input("\nDoes your server have custom member role (YESY/NO)\n")
+    if QUESTION.lower() == 'yes':
+        INPUT_MEMBER_ROLE_NAME= input("\nEnter member role name\n")
+    else:
+        INPUT_MEMBER_ROLE_NAME= None
     config = {
         'prefix': INPUT_PREFIX,
         'bot_token': INPUT_BOT_TOKEN,
@@ -34,7 +40,8 @@ if not os.path.isfile('BotConfig.json'):
         'owner_name': INPUT_OWNER_NAME,
         'mod_role': INPUT_MOD_ROLE_NAME,
         'owner_role': INPUT_OWNER_ROLE_NAME,
-        'imagine_enabled': 'False'
+        'member_role': INPUT_MEMBER_ROLE_NAME,
+        'debug': 'False'
     }
     with open('BotConfig.json', 'w') as f:
         f.write(json.dumps(config, indent=4, ensure_ascii=False, separators=(',', ': ')) + '\n')
@@ -45,19 +52,54 @@ else:
         config = json.load(f)
 
     bot = commands.Bot(command_prefix=config['prefix'], intents=discord.Intents.all())
-    # Suppress noise about console usage from errors
-    youtube_dl.utils.bug_reports_message = lambda: ''
 
-    # Suppress noise about too many arguments to function
-    youtube_dl.YoutubeDL.extract_info = lambda ydl, url, download=None: ydl.extract_info(url, download=False)
+    @bot.event
+    async def on_ready():
+        print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+        debug = config['debug']
+        print(f'Debug: {debug}')
+
+    @bot.event
+    async def on_member_join(member):
+        ID = int(config['welcome_channel'])
+        channel = bot.get_channel(1096103887188021248) # Replace channel_id with the ID of the channel you want the bot to send the message in
+        await channel.send(f'Welcome to the server, {member.mention}!')
+        if config['debug'] == True:
+            print(ID)
+            print(bot.get_all_channels())
 
     def has_required_perm():
         async def predicate(ctx):
             try:
-                required_role_name = config['mod_role'] 
-                required_role = discord.utils.get(ctx.guild.roles, name=required_role_name)
+                owner_role_name = config['owner_role']
+                owner_role = discord.utils.get(ctx.guild.roles, name=owner_role_name)
+                mod_role_name = config['mod_role']
+                mod_role = discord.utils.get(ctx.guild.roles, name=mod_role_name)
+                owner_id = config['owner_id']
 
-                if required_role not in ctx.author.roles:
+                if config['debug'] == "True":
+        
+
+                    print(f'Author ID: {ctx.author.id}')
+                    print(f'Owner ID: {owner_id}')
+
+                    if owner_role not in ctx.author.roles:
+                        y= 'No'
+                    else:
+                        y= 'Yes'
+
+                    if mod_role not in ctx.author.roles:
+                        my= 'No'
+                    else:
+                        my= 'Yes'        
+            
+                    author_name = ctx.author.name
+                    print(f'does Author has Owner role: {y}')
+                    print(f'does Author has Mod role: {my}')
+                    print(f'Name: {author_name}')
+
+
+                if str(owner_id) != str(ctx.author.id) and mod_role not in ctx.author.roles:
                     await ctx.send("You don't have the required permision to execute this command!")
                     return False
             except Exception as e:
@@ -67,24 +109,35 @@ else:
 
         return commands.check(predicate)
 
-
-
-
     def has_owner_perm():
         async def predicate(ctx):
             owner_role_name = config['owner_role']
             owner_role = discord.utils.get(ctx.guild.roles, name=owner_role_name)
+            mod_role_name = config['mod_role']
+            mod_role = discord.utils.get(ctx.guild.roles, name=mod_role_name)
             owner_id = config['owner_id']
 
-            print(f'Author ID: {ctx.author.id}')
-            print(f'Owner ID: {owner_id}')
+            if config['debug'] == "True":
+        
 
-            if owner_role not in ctx.author.roles:
-                y= 'No'
-            else:
-                y= 'Yes'
+                print(f'Author ID: {ctx.author.id}')
+                print(f'Owner ID: {owner_id}')
 
-            print(f'does Author has Owner role: {y}')
+                if owner_role not in ctx.author.roles:
+                    y= 'No'
+                else:
+                    y= 'Yes'
+
+                if mod_role not in ctx.author.roles:
+                    my= 'No'
+                else:
+                    my= 'Yes'        
+        
+                author_name = ctx.author.name
+
+                print(f'does Author has Owner role: {y}')
+                print(f'does Author has Mod role: {my}')
+                print(f'Name: {author_name}')
 
             if str(owner_id) != str(ctx.author.id) and owner_role not in ctx.author.roles:
                     await ctx.send("You don't have the required permission to execute this command!")
@@ -96,25 +149,19 @@ else:
     @bot.command()
     async def about_me(ctx):
         try:
-            roles = ctx.author.roles
+            role_names = [role.name for role in ctx.author.roles]
+            roles = role_names
             Id = ctx.author.id
+            name=ctx.author.name
             message = (f'''
             roles: {roles}
-            ID: {Id}''')
+            ID: {Id}
+            Name: {name}''')
             await ctx.send(message)
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
 
-    # Setup bot events
-    @bot.event
-    async def on_ready():
-        print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-
-    @bot.event
-    async def on_member_join(member):
-        channel = bot.get_channel(config['welcome_channel'])
-        await channel.send(f'Welcome to the server, {member.mention}!')
-
+        
     # Define bot commands
     @bot.command()
     @has_required_perm()
@@ -130,28 +177,28 @@ else:
     async def ban(ctx, member: discord.Member):
         try:
             await member.ban()
-            await ctx.send(f'{member} has been banned from the server.)')
+            await ctx.send(f'{member} has been banned from the server.')
         except Exception as e:
             await ctx.send(f'An error occured: {e}')
 
     @bot.command()
     @has_required_perm()
-    async def unban(ctx, *, member):
+    async def unban(ctx, *, name):
         try:
-            banned_users = await ctx.guild.bans()
-            member_name, member_discriminator = member.split('#')
-
-            for ban_entry in banned_users:
+            async for ban_entry in ctx.guild.bans():
                 user = ban_entry.user
-
-                if (user.name, user.discriminator) == (member_name, member_discriminator):
+                if user.name.lower() == name.lower():
                     await ctx.guild.unban(user)
                     await ctx.send(f'{user.mention} has been unbanned from the server.')
                     return
-
-            await ctx.send(f'Could not find banned user: {member}')
+            await ctx.send(f'Could not find banned user: {name}')
         except Exception as e:
-            await ctx.send(f'An error occured: {e}')
+            await ctx.send(f'An error occurred: {e}')
+
+
+
+
+
 
     @bot.command()
     @has_required_perm()
@@ -164,14 +211,15 @@ else:
                 permissions = discord.Permissions(send_messages=False, speak=False)
                 mute_role = await guild.create_role(name="Muted", permissions=permissions)
                 
+                # Set permissions for all channels
                 for channel in guild.channels:
-                    await channel.set_permissions(mute_role, send_messages=False, speak=False)
-            
-            # Add the mute role to the member
+                    await channel.set_permissions(mute_role, send_messages=False, speak=False)    
+            # Add the mute role to the member and send a message
             await member.add_roles(mute_role, reason=reason)
             await ctx.send(f"{member.mention} has been muted.")
         except Exception as e:
-            await ctx.send(f'An error occured: {e}')
+            await ctx.send(f"An error occurred: {e}")
+
     @bot.command()
     @has_required_perm()
     async def unmute(ctx, member: discord.Member, *, reason=None):
@@ -189,12 +237,12 @@ else:
     async def shutdown(ctx):
         try:
             await ctx.send('Shutting down...')
-            exit()
+            return
         except:
-            exit()
+            return
 
     @bot.command()
-    @has_required_perm()
+    @has_owner_perm()
     async def status(ctx, arg: str):
         try:
             if arg == 'online':
@@ -250,12 +298,84 @@ else:
         except Exception as e:
             await ctx.send(f'An error occured: {e}')
     @bot.command()
+    @has_required_perm()
     async def nickname(ctx, *, new_name: str):
         try:
             await ctx.guild.me.edit(nick=new_name)
             await ctx.send(f"My nickname has been changed to {new_name}")
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
+
+        
+    @bot.command()
+    async def ticket(ctx):
+        guild = ctx.guild
+        category = discord.utils.get(guild.categories, name="Tickets")
+        if not category:
+            category = await guild.create_category(name="Tickets")
+        role = discord.utils.get(ctx.guild.roles, name=config['member_role'])
+        if config['member_role'] == None:
+            role= guild.default_role 
+        mod_role = discord.utils.get(ctx.guild.roles, name=config['mod_role'])
+
+        overwrites = {
+            role: discord.PermissionOverwrite(read_messages=False),
+            mod_role : discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+
+        debug = config['debug']
+        if debug == "True":
+            print(f'Default role: {role}')
+            print(f'Mod role: {mod_role}')
+
+        channel = await category.create_text_channel(f'ticket-{ctx.author.display_name}', overwrites=overwrites)
+        msg = (f"""
+       Your ticket has been created at {channel.mention}.
+       A staff will help you shortly""")
+        await ctx.send(msg)
+
+    @bot.command()
+    @has_required_perm()
+    async def close(ctx):
+        try:
+            if not ctx.channel.name.startswith('ticket-'):
+                await ctx.send('This command can only be used in a ticket channel.')
+                return
+            await ctx.channel.delete()
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            
+    @bot.command()
+    async def random(ctx, mi=None, ma=None):
+        try:
+            prefix = config['prefix']
+            if mi == None or ma == None or int(mi) >= int(ma) or not isinstance(int(mi), int) or not isinstance(int(ma), int):
+                await ctx.send(f'Incorrect usage. Please use `{prefix}random [minimum] [maximum]` with integer values.')
+                return
+            output = rand.randint(int(mi), int(ma))
+            await ctx.send(f'Your random number is: {output}')
+        except Exception as e:
+            await ctx.send(f"An error occurred: {e}")
+    @bot.command()
+    @has_required_perm()
+    async def addrole(ctx, member: discord.Member, role: discord.Role):
+        try:
+            await member.add_roles(role)
+            await ctx.send(f"{member.display_name} has been given the {role.name} role.")
+        except Exception as e:
+            await ctx.send(f"An error occurred: {e}")
+
+    @bot.command()
+    @has_required_perm()
+    async def removerole(ctx, member: discord.Member, role: discord.Role):
+        try:
+            await member.remove_roles(role)
+            await ctx.send(f"{member.display_name} has had the {role.name} role removed.")
+        except Exception as e:
+            await ctx.send(f"An error occurred: {e}")
+
 
 
 
@@ -276,27 +396,50 @@ else:
 
     # Define help command
     @bot.command()
-    async def h(ctx):
-        
-        prefix=config['prefix']
-        owner_id=config['owner_id']
-        owner = await bot.fetch_user(owner_id)
-        help_msg =(f'''**Commands:**
-        `kick <member>` - Kick a member from the server.
-        `ban <member>` - Ban a member from the server.
-        `unban <member>` - Unban a member from the server.
-        `mute <member>` - Mute a member in the server.
-        `shutdown` - Shut down the bot.
-        `h` - Show this help message.
-        `set_status <value>` - sets custom status.
-        `clear_status` - Sets to default status
-        `setnickname <member>` - Changes nickname of other members
-        `nickname <name>` - Sets custom nickname 
-        And add "''' + prefix + '" Before any of the commands Example "' + prefix +
-        """h" """ + f"""For More Info Contact <@{owner.id}>""")
+    async def h(ctx, typ=None):
+        if not typ:
+            prefix=config['prefix']
+            owner_id=config['owner_id']
+            owner = await bot.fetch_user(owner_id)
+            help_msg =(f'''**Commands:**
+            `{prefix}h` - Show this help message.
+            `{prefix}ticket` - Make a ticket of player support.
+            `{prefix}about_me` - Tells you a few things about your user ID.
+            `{prefix}random <min> <max>` - Gives you a random number.
+            For Moderation commands type {prefix}h mod
+            For Owner commands type {prefix}h owner
+            For More Info Contact <@{owner.id}>''')
 
-        await ctx.send(help_msg)
-
+            await ctx.send(help_msg)
+            return
+        elif typ == 'owner':
+            prefix=config['prefix']
+            owner_id=config['owner_id']
+            owner = await bot.fetch_user(owner_id)
+            help_msg= (f'''**Commands:**
+            `{prefix}set_status` - Custom Status.
+            `{prefix}clear_status` - Clears Custom Status.
+            `{prefix}shutdown` - Shutsdown the bot
+            For More Info Contact <@{owner.id}>''')
+            await ctx.send(help_msg)
+            return
+        elif typ == 'mod':
+            prefix=config['prefix']
+            owner_id=config['owner_id']
+            owner = await bot.fetch_user(owner_id)
+            help_msg= (f'''**Commands:**
+            `{prefix}ban <member> <reason>` - Bans a member from the server.
+            `{prefix}unban <member>` - Unbans a member from the server.
+            `{prefix}kick <member>` - Kicks a member from the server.
+            `{prefix}mute <member>` - Mutes a member of the server.
+            `{prefix}unmute <member>` - Unmutes a member of the server
+            `{prefix}set_nickname <member>` - Changes nickname of a member.
+            `{prefix}nickname <value>` - Changes nickname of the bot.
+            `{prefix}close` - Closes a ticket.
+            `{prefix}addrole <member> <role>` - Adds a role to a member.
+            `{prefix}removerole <member> <role>` - Remove role from a member.
+            For More Info Contact <@{owner.id}>''')
+            await ctx.send(help_msg)
 
 
 
