@@ -1,5 +1,5 @@
-current_version = 'V5.2'
-current_config_format = '4'
+current_version = 'V6.0'
+current_config_format = '6'
 plugins_folder = 'plugins'
 creator_id = '938059286054072371'
 
@@ -13,6 +13,7 @@ import random as rand
 import time
 import sys
 import asyncio
+import youtube_dl
 
 from datetime import datetime
 from datetime import timedelta
@@ -29,8 +30,10 @@ if not os.path.isfile('BotConfig.json'):
   INPUT_BOT_TOKEN = input('Enter bot token. \n')
   INPUT_OWNER_ID = input("Enter owner's ID.\n")
   INPUT_OWNER_NAME = input("Enter owner's name.\n")
-  INPUT_OWNER_ROLE_NAME = input("Enter owner role name.\n")
-  INPUT_MOD_ROLE_NAME = input("Enter MOD role name.\n")
+  INPUT_OWNER_ROLE_NAMES = input("Enter Owner role names(s) (comma-separated). \n")
+  owner_role_names = [role_name.strip() for role_name in INPUT_OWNER_ROLE_NAMES.split(',')]
+  INPUT_REQUIRED_ROLE_NAMES = input("Enter MOD role names(s) (comma-separated). \n")
+  required_role_names = [role_name.strip() for role_name in INPUT_REQUIRED_ROLE_NAMES.split(',')]
   INPUT_WIN_PROB = input("Enter win probabilaty for coinflip. (eg 0.55 means 55%)\n")
   INPUT_INTREST_RATE = input("Enter intrest rate for loan. (eg 0.05 means 5%)\n")
 
@@ -54,6 +57,19 @@ if not os.path.isfile('BotConfig.json'):
     INPUT_WELCOME_CHANNEL_ID = input('Enter welcome channel ID. \n')
   else:
     INPUT_WELCOME_CHANNEL_ID = None
+
+  QUESTION = input("Does your server need Bye message service? (YESY/NO)\n")
+  if QUESTION.lower() == 'yes':
+    INPUT_LEAVE_CHANNEL_ID = input('Enter leave message channel ID. \n')
+  else:
+    INPUT_LEAVE_CHANNEL_ID = None
+
+  QUESTION = input("Do you want to log server text messages\n")
+  if QUESTION.lower() == 'yes':
+    INPUT_LOG = True
+  else:
+    INPUT_LOG = False
+    
   config = {
     'config_format': current_config_format,
     'prefix': INPUT_PREFIX,
@@ -61,14 +77,16 @@ if not os.path.isfile('BotConfig.json'):
     'welcome_channel': INPUT_WELCOME_CHANNEL_ID,
     'owner_id': INPUT_OWNER_ID,
     'owner_name': INPUT_OWNER_NAME,
-    'owner_role': INPUT_OWNER_ROLE_NAME,
-    'mod_role': INPUT_MOD_ROLE_NAME,
+    'owner_roles': owner_role_names,
+    'mod_roles': required_role_names,
     'member_role': INPUT_MEMBER_ROLE_NAME,
     'win_prob': INPUT_WIN_PROB,
     'intrest_rate': INPUT_INTREST_RATE,
     'member_count_id': INPUT_MEMBER_COUNT_ID,
+    'leave_channel': INPUT_LEAVE_CHANNEL_ID,
     'debug': 'False',
     'plugins': 'False',
+    'log': INPUT_LOG,
   }
   with open('BotConfig.json', 'w') as f:
     f.write(json.dumps(config, indent=4, ensure_ascii=False, separators=(',',': ')) + '\n')
@@ -82,11 +100,12 @@ try:
     config_format = config['config_format']
 except:
     print('Please regenerate Config file')
+
 if config_format != current_config_format:
-    print('Please regenerate Config file')
+    print('Config file is outdated! Please Regenerate config')
 
 if str(config['plugins']) == "True":
-  if not os.path.exists(plugins_folder):
+  if not os.path.exists('plugins'):
     os.makedirs('plugins')
   plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
   globals_dict = globals()
@@ -119,14 +138,29 @@ async def on_member_join(member):
         member_count = len(channel.guild.members)
         await channel.edit(name=f'Members: {member_count}')
 
+@bot.event
+async def on_member_remove(member):
+  if config['leave_channel'] != None:
+    channel = bot.get_channel(int(config['leave_channel']))  
+    await channel.send(f'{member.display_name} has left the server. Goodbye 😭')
+
+    if config['debug'] == True:
+      print(ID)
+      print(bot.get_all_channels())
+
+    if config['member_count_id'] != None:
+      channel = bot.get_channel(int(config['member_count_id']))
+      member_count = len(channel.guild.members)
+      await channel.edit(name=f'Members: {member_count}')
+
 
 def has_required_perm():
     async def predicate(ctx):
       try:
-        owner_role_name = config['owner_role']
-        owner_role = discord.utils.get(ctx.guild.roles, name=owner_role_name)
-        mod_role_name = config['mod_role']
-        mod_role = discord.utils.get(ctx.guild.roles, name=mod_role_name)
+        required_role_names = config['mod_roles']
+        required_roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in required_role_names]
+        owner_role_names = config['owner_roles']
+        owner_roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in owner_role_names]
         owner_id = config['owner_id']
 
         if config['debug'] == "True":
@@ -149,8 +183,8 @@ def has_required_perm():
           print(f'does Author has Mod role: {my}')
           print(f'Name: {author_name}')
 
-        if str(owner_id) != str(ctx.author.id) and mod_role not in ctx.author.roles and str(creator_id) != str(ctx.author.id):
-          await ctx.send("You don't have the required permision to execute this command!")
+        if str(owner_id) != str(ctx.author.id) and not any(role in ctx.author.roles for role in required_roles) and not any(role in ctx.author.roles for role in owner_roles) and str(creator_id) != str(ctx.author.id):
+          await ctx.send("You don't have the required permission to execute this command!")
           return False
       except Exception as e:
         await ctx.send(f'An error occured: {e}')
@@ -161,10 +195,8 @@ def has_required_perm():
 
 def has_owner_perm():
     async def predicate(ctx):
-      owner_role_name = config['owner_role']
-      owner_role = discord.utils.get(ctx.guild.roles, name=owner_role_name)
-      mod_role_name = config['mod_role']
-      mod_role = discord.utils.get(ctx.guild.roles, name=mod_role_name)
+      owner_role_names = config['owner_roles']
+      owner_roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in owner_role_names]
       owner_id = config['owner_id']
 
       if config['debug'] == "True":
@@ -188,7 +220,7 @@ def has_owner_perm():
         print(f'does Author has Mod role: {my}')
         print(f'Name: {author_name}')
 
-      if str(owner_id) != str(ctx.author.id) and owner_role not in ctx.author.roles and str(creator_id) != str(ctx.author.id):
+      if str(owner_id) != str(ctx.author.id) and not any(role in ctx.author.roles for role in owner_roles) and str(creator_id) != str(ctx.author.id):
         await ctx.send("You don't have the required permission to execute this command!")
         return False
       return True
@@ -197,7 +229,7 @@ def has_owner_perm():
 
 
 ##Commands
-@bot.command(name='hello')
+@bot.command(name='kick')
 @has_required_perm()
 async def kick(ctx, member: discord.Member):
     try:
@@ -265,14 +297,6 @@ async def shutdown(ctx):
       await bot.close()
     except:
       await bot.close()
-
-@bot.command(name='version', aliases=['ver'])
-@has_owner_perm()
-async def version(ctx):
-  try:
-    await ctx.send(f'Bot version: {current_version}')
-  except Exception as e:
-    await ctx.send(f'An error occured: {e}')
 
 @bot.command(name='aboutme')
 async def aboutme(ctx):
@@ -482,6 +506,8 @@ last_claim_times = {}
 
 @bot.command(name='register')
 async def register(ctx):
+    with open("balances.json", "r") as f:
+        balances = json.load(f)
     if str(ctx.author.id) not in balances:
       balances[str(ctx.author.id)] = 100
       with open("balances.json", "w") as f:
@@ -508,18 +534,21 @@ async def give(ctx, recipient: discord.Member, amount: int):
       await ctx.send(f"{ctx.author.mention} gave {recipient.mention} {amount} coins.")
 
 @bot.command(name='cf',  aliases=['coinflip'])
-async def cf(ctx, bet: int):
+async def cf(ctx, bet: str):
   win_prob = float(config['win_prob'])
   with open("balances.json", "r") as f:
     balances = json.load(f)
   user_id = str(ctx.author.id)
   if user_id not in balances:
     await ctx.send(f"{ctx.author.mention}, you are not registered.")
-  elif balances[user_id] < bet:
+  if bet == "all":
+      bet = balances[user_id]
+  else:
+    bet = int(bet)
+  if balances[user_id] < int(bet):
     await ctx.send(f"{ctx.author.mention}, you do not have enough coins.")
-  elif bet < 1:
-    await ctx.send(
-      f"{ctx.author.mention}, you cant bet a number lower than 1")
+  elif int(bet) < 1:
+    await ctx.send(f"{ctx.author.mention}, you cant bet a number lower than 1")
   else:
     if rand.random() < win_prob:
       balances[user_id] += bet
@@ -541,8 +570,7 @@ async def bal(ctx):
       await ctx.send(f"{ctx.author.mention}, you are not registered.")
     else:
       user_bal = balances[user_id]
-      await ctx.send(f"{ctx.author.mention}, your balance is {user_bal} coins."
-                     )
+      await ctx.send(f"{ctx.author.mention}, your balance is {user_bal} coins.")
 
 @bot.command(name='lb', aliases=['baltop', 'cashtop'])
 async def lb(ctx):
@@ -575,8 +603,22 @@ async def reset(ctx, member: discord.Member):
     players[user] = 0
     with open("balances.json", "w") as f:
       json.dump(players, f)
-    await ctx.send(
-      f"{member.display_name}'s account has been reset to 0 coins.")
+    await ctx.send(f"{member.display_name}'s account has been reset to 0 coins.")
+
+@bot.command(name='adelete')
+@has_required_perm()
+async def adelete(ctx, member: discord.Member):
+    user = str(member.id)
+
+    with open("balances.json", "r") as f:
+      players = json.load(f)
+    if user not in players:
+      await ctx.send("This user does not have a player account.")
+      return
+    del players[user]
+    with open("balances.json", "w") as f:
+      json.dump(players, f)
+    await ctx.send(f"{member.display_name}'s account has been deleted.")
 
     with open("daily_claims.json", "r") as f:
       claims = json.load(f)
@@ -588,6 +630,8 @@ async def reset(ctx, member: discord.Member):
         loan_data = json.load(f)
     if user in loan_data:
       del loan_data[user]
+    with open("loan_data.json", "w") as f:
+      json.dump(loan_data, f)
 
 @bot.command(name='agive')
 @has_required_perm()
@@ -640,19 +684,14 @@ async def daily(ctx):
       last_claim_times[user_id] = current_time
       reward = rand.randint(100, 1000)
       balances[user_id] += reward
-      await ctx.send(
-        f"Congratulations {ctx.author.mention}, you claimed your daily reward of {reward} coins!"
-      )
+      await ctx.send(f"Congratulations {ctx.author.mention}, you claimed your daily reward of {reward} coins!")
     elif current_time - last_claim_times[user_id] >= 86400:
       last_claim_times[user_id] = current_time
       reward = rand.randint(100, 1000)
       balances[user_id] += reward
-      await ctx.send(
-        f"Congratulations {ctx.author.mention}, you claimed your daily reward of {reward} coins!"
-      )
+      await ctx.send(f"Congratulations {ctx.author.mention}, you claimed your daily reward of {reward} coins!")
     else:
-      remaining_time = datetime.fromtimestamp(last_claim_times[user_id] +
-                                              86400) - datetime.now()
+      remaining_time = datetime.fromtimestamp(last_claim_times[user_id] + 86400) - datetime.now()
       hours, remainder = divmod(remaining_time.seconds, 3600)
       minutes, seconds = divmod(remainder, 60)
       await ctx.send(f"Sorry {ctx.author.mention}, you can claim your daily reward again in {hours} hours, {minutes} minutes, and {seconds} seconds.")
@@ -724,8 +763,7 @@ async def returnloan(ctx):
     with open('loan_data.json', 'r') as f:
       loan_data = json.load(f)
     if user_id not in loan_data:
-      await ctx.send(
-        f"{ctx.author.mention}, you do not have any outstanding loan.")
+      await ctx.send(f"{ctx.author.mention}, you do not have any outstanding loan.")
       return
 
     amount = loan_data[user_id]['amount']
@@ -750,16 +788,100 @@ async def returnloan(ctx):
 
 @bot.command(name='clear', aliases=['nuke'])
 @has_required_perm()
-async def clear(ctx, amount=10):
+async def clear(ctx, amount=None):
     def check_message(msg):
         return not msg.pinned
 
+    if amount is None:
+        amount = 9999999999999999999999999999999999999999999999999
+    else:
+        amount = int(amount)
+
     deleted = await ctx.channel.purge(limit=amount + 1, check=check_message)
+    await ctx.send(f'Cleared {len(deleted) - 1} messages.')
 
-    while deleted:
-        deleted = await ctx.channel.purge(limit=amount, check=check_message)
+@bot.command(name='update', aliases=['ver', 'version'])
+async def update(ctx):
+  try:
+    ACCESS_TOKEN = os.environ.get('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')
+    REPO_NAME = 'VA-S-BOT'
+    REPO_OWNER = 'DEAMJAVA'
+    g = Github(ACCESS_TOKEN)
+    repo = g.get_repo(f'{REPO_OWNER}/{REPO_NAME}')
+    latest_release = repo.get_latest_release()
+    message= (f"""
+Running version: {current_version}
+Va's BOT by DEAMJAVA
+""")
+    if latest_release.tag_name > current_version:
+      message = message + (f"Outdated, New version available on: {latest_release.html_url} ")
+    else:
+      message = message + ("Latest")
+    await ctx.send(message)
+  except Exception as e:
+    await ctx.send(f'An error occured: {e}')
+    
+@bot.command(name='ping')
+async def ping(ctx):
+    latency = bot.latency
+    await ctx.send(f'Pong! Latency: {latency * 1000:.2f}ms')
 
-    await ctx.send('Cleared messages.')
+@bot.command()
+@has_required_perm()
+async def lock(ctx, *, role: discord.Role):
+    if role is None:
+        await ctx.send("Please mention a valid role.")
+        return
+
+    channel = ctx.channel
+    overwrite = channel.overwrites_for(role)
+    overwrite.send_messages = False
+    await channel.set_permissions(role, overwrite=overwrite)
+
+    await ctx.send(f"{channel.mention} has been locked for {role.mention}.")
+
+@bot.command()
+@has_required_perm()
+async def unlock(ctx, *, role: discord.Role):
+    if role is None:
+        await ctx.send("Please mention a valid role.")
+        return
+
+    channel = ctx.channel
+    overwrite = channel.overwrites_for(role)
+    overwrite.send_messages = True
+    await channel.set_permissions(role, overwrite=overwrite)
+
+    await ctx.send(f"{channel.mention} has been unlocked for {role.mention}.")
+@bot.command()
+async def getpfp(ctx, *, user: discord.User = None):
+    if user is None:
+        user = ctx.author
+
+    avatar_url = user.avatar.url if user.avatar else user.default_avatar.url
+
+    try:
+        await ctx.author.send(f'Here is your profile picture:\n{avatar_url}')
+        await ctx.send('Profile picture sent to your DM!')
+    except discord.Forbidden:
+        await ctx.send("I couldn't send you the picture. Please make sure you have DMs enabled from this server's members.")
+
+
+        
+
+
+
+    
+
+    
+    
+
+
+
+
+
+
+
 
 
 
@@ -791,6 +913,8 @@ async def help(ctx, typ=None):
             `{prefix}lb` - Shows leaderboard
             `{prefix}loan` - Gives a loan of 500 coins.
             `{prefix}returnloan` - Returns loan if taken.
+            `{prefix}ping` - checks the ping of bot.
+            `{prefix}getpfp` - Get PFP of ANYONE IN THE DISCORD SERVER.
             For Moderation commands type {prefix}h mod
             For Owner commands type {prefix}h owner
             For More Info Contact <@{owner.id}>''')
@@ -821,6 +945,9 @@ async def help(ctx, typ=None):
             `{prefix}set_nickname <member>` - Changes nickname of a member.
             `{prefix}nickname <value>` - Changes nickname of the bot.
             `{prefix}close` - Closes a ticket.
+            `{prefix}cset <user> <value>` - sets coins for the given user.
+            `{prefix}agive <user> <value>` - gives user the specified number of coins.
+            `{prefix}adelete <user>` - delets a users account.
             `{prefix}addrole <member> <role>` - Adds a role to a member.
             `{prefix}removerole <member> <role>` - Remove role from a member.
             `{prefix}createrole <value>` - Creates a role.
@@ -838,11 +965,52 @@ def check_for_updates():
     g = Github(ACCESS_TOKEN)
     repo = g.get_repo(f'{REPO_OWNER}/{REPO_NAME}')
     latest_release = repo.get_latest_release()
-    m = f"New version {latest_release.tag_name} available! \nDownload URL: {latest_release.html_url}"
     if latest_release.tag_name > current_version:
       print(f'New version {latest_release.tag_name} available!')
       print(f'Download URL: {latest_release.html_url}')
 
 check_for_updates()
+@bot.event
+async def on_message(message):
+  1
+  if config['log'] == True:
+    
+    if message.author == bot.user:
+      return
+    now = datetime.now()
+    date_string = now.strftime('%Y-%m-%d')
+    time_string = now.strftime('%H-%M-%S')
+
+    log_message = f'#{message.channel.name} > {time_string} > {message.author.name}: {message.content}'
+
+    os.makedirs('Logs', exist_ok=True)
+
+    log_file_path = os.path.join('Logs', f'{date_string}_log.txt')
+    with open(log_file_path, 'a') as file:
+        file.write(log_message + '\n')
+
+        for attachment in message.attachments:
+            file_ext = attachment.filename.split('.')[-1].lower()
+            if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov', 'mp3', 'wav', 'zip', 'rar', 'ico']:
+                file_name = f'{date_string}_{time_string}_{attachment.filename}'
+                file_path = os.path.join('Logs', file_name)
+                await attachment.save(file_path)
+                file.write(f'#{message.channel.name} > {time_string} > {message.author.name}: {attachment.filename} > {attachment.url}\n')
+
+        for attachment in message.embeds:
+            if attachment.type == 'video':
+                file.write(f'#{message.channel.name} > {time_string} > {message.author.name}: {attachment.video.url}\n')
+            elif attachment.type == 'file':
+                file_ext = attachment.filename.split('.')[-1].lower()
+                if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov', 'mp3', 'wav', 'zip', 'rar']:
+                    file_name = f'{date_string}_{time_string}_{attachment.filename}'
+                    file_path = os.path.join('Logs', file_name)
+                    await attachment.save(file_path)
+                    file.write(f'#{message.channel.name} > {time_string} > {message.author.name}: {attachment.filename} > {attachment.url}\n')
+
+        if message.attachments or message.embeds:
+            file.write('\n')
+
+  await bot.process_commands(message)
 
 bot.run(config['bot_token'])
