@@ -1,4 +1,4 @@
-current_version = 'V6.0'
+current_version = 'V6.1'
 current_config_format = '6'
 plugins_folder = 'plugins'
 creator_id = '938059286054072371'
@@ -865,6 +865,18 @@ async def getpfp(ctx, *, user: discord.User = None):
         await ctx.send('Profile picture sent to your DM!')
     except discord.Forbidden:
         await ctx.send("I couldn't send you the picture. Please make sure you have DMs enabled from this server's members.")
+@bot.command(name="reloadresponses", aliases=['reloadresponse', 'responsesreload', 'responsereload'])
+@has_required_perm()
+async def reloadresponses(ctx):
+    try:
+        with open("responses.json", "r") as f:
+            global responses
+            responses = json.load(f)
+    except FileNotFoundError:
+        responses = {}
+        with open("responses.json", "w") as f:
+            json.dump(responses, f)
+    await ctx.send("Responses has been reloaded!")
 
 
         
@@ -929,7 +941,7 @@ async def help(ctx, typ=None):
             `{prefix}setstatus` - Custom Status.
             `{prefix}clearstatus` - Clears Custom Status.
             `{prefix}shutdown` - Shutsdown the bot
-            For more information contact <{creator_id}>''')
+            For more information contact <@{creator_id}>''')
       await ctx.send(help_msg)
       return
     elif typ == 'mod':
@@ -955,6 +967,7 @@ async def help(ctx, typ=None):
             `{prefix}changerolecolor <valuse> <hex value>` - Changes role colour.
             `{prefix}reset <member>` - Resets account of a member.
             `{prefix}nuke` - deletes messeges of the chat.
+            `{prefix}reloadresponse` - reloads custom responses.
             For More Info Contact <@{owner.id}>''')
       await ctx.send(help_msg)
 
@@ -970,9 +983,15 @@ def check_for_updates():
       print(f'Download URL: {latest_release.html_url}')
 
 check_for_updates()
+try:
+    with open("responses.json", "r") as f:
+        responses = json.load(f)
+except FileNotFoundError:
+    responses = {}
+    with open("responses.json", "w") as f:
+        json.dump(responses, f)
 @bot.event
 async def on_message(message):
-  1
   if config['log'] == True:
     
     if message.author == bot.user:
@@ -1010,6 +1029,28 @@ async def on_message(message):
 
         if message.attachments or message.embeds:
             file.write('\n')
+    if message.author == bot.user:
+      return
+    def check_message(message, keywords, caps):
+      content = message.content if caps else message.content.lower()
+      words = content.split()
+      return all((keyword in words) if caps else (keyword.lower() in words) for keyword in keywords)
+      
+    words = message.content.lower().split()
+
+    for key, response_data in responses.items():
+        keywords = response_data['keywords']
+        response = response_data['response']
+        caps = response_data.get('caps', False)
+
+        if response_data.get('type', 'any') == "all":
+            if check_message(message, keywords, caps):
+                await message.channel.send(response)
+                break
+        else:
+            if any((keyword in message.content) if caps else (keyword.lower() in message.content.lower()) for keyword in keywords):
+                await message.channel.send(response)
+                break
 
   await bot.process_commands(message)
 
