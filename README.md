@@ -1,4 +1,5 @@
 # VA'S-BOT
+<b>NOT UPDATED ANYMORE</b>
 A Moderation Bot for Discord
 (<b>TESTED ONLY ON WINDOWS!</b>)
 # How to download
