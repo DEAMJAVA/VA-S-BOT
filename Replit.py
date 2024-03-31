@@ -1,4 +1,3 @@
-print('Loaded Replit 24/7 Plugin')
 if not os.path.isfile('replit.py'):
     data = '''
 from flask import Flask, render_template
