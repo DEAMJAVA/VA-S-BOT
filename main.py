@@ -1,5 +1,5 @@
-current_version = 'V10.0'
-current_config_format = '16'
+current_version = 'V12.0'
+current_config_format = '17'
 plugins_folder = 'plugins'
 creator_id = '938059286054072371'
 api = 'http://192.9.183.164:25041'
@@ -8,38 +8,55 @@ TIMER_FILE = 'time.r'
 libraries = """
 aiohttp==3.9.3
 aiosignal==1.3.1
+asyncio-dgram==2.2.0
 attrs==23.2.0
 blinker==1.7.0
 certifi==2024.2.2
 cffi==1.16.0
-googletrans==4.0.0-rc1
+chardet==3.0.4
 charset-normalizer==3.3.2
 click==8.1.7
 colorama==0.4.6
 cryptography==42.0.5
 Deprecated==1.2.14
+dnspython==2.7.0
 Flask==3.0.2
 frozenlist==1.4.1
-idna==3.6
+googletrans==4.0.0rc1
+h11==0.9.0
+h2==3.2.0
+hpack==3.0.0
+hstspreload==2024.8.1
+httpcore==0.9.1
+httpx==0.13.3
+hyperframe==5.2.0
+idna==2.10
 itsdangerous==2.1.2
 Jinja2==3.1.3
 MarkupSafe==2.1.5
+mcstatus==11.1.1
 mpmath==1.3.0
 multidict==6.0.5
+numpy==2.1.3
+pillow==11.0.0
 py-cord==2.6.0
 pycparser==2.22
 PyGithub==2.3.0
 PyJWT==2.8.0
 PyNaCl==1.5.0
 pytz==2024.1
+qrcode==8.0
 requests==2.31.0
+rfc3986==1.5.0
+setuptools==75.6.0
+sniffio==1.3.1
 sympy==1.12
 typing_extensions==4.10.0
 urllib3==2.2.1
 Werkzeug==3.0.1
 wrapt==1.16.0
 yarl==1.9.4
-googletrans==4.0.0rc1
+yt-dlp==2024.12.6
 """
 
 # Imports
@@ -66,12 +83,16 @@ try:
     import requests
     import urllib.request
     import importlib.util
-    from discord import Option
+    from discord import Option, SelectOption, ui, InputText
     from googletrans import Translator
     from datetime import datetime, timedelta, timezone
     from github import Github, RateLimitExceededException, GithubException
     from discord import Status
+    from discord.ui import Button, View, Modal, InputText, Select
+    from discord.utils import get
     from discord.ext import commands, tasks
+    from PIL import Image
+    from io import BytesIO
     from sympy import symbols, Eq, solve
     from difflib import get_close_matches
 except Exception as e:
@@ -80,13 +101,17 @@ except Exception as e:
         f.write(libraries)
     os.system('pip install -r libraries.txt')
     exit()
+
+button_configurations = []
+
+button_views = {}
+
 #Startup
 log = logging.info
 logw = logging.warning
 logerr = logging.error
 logc = logging.critical
 loge = logging.exception
-
 
 # Create Config if not exist
 if not os.path.isfile('BotConfig.json'):
@@ -96,7 +121,6 @@ if not os.path.isfile('BotConfig.json'):
         "What do you want the bot group name to be (default role perms will be created on this name)\n")
     INPUT_BOT_TOKEN = input('Enter bot token. \n')
     INPUT_OWNER_ID = input("Enter owner's ID.\n")
-    INPUT_OWNER_NAME = input("Enter owner's name.\n")
 
     QUESTION = input("Enable economy? (YES/NO)\n")
     if QUESTION.lower() == 'yes':
@@ -113,60 +137,26 @@ if not os.path.isfile('BotConfig.json'):
         INPUT_WIN_PROB = None
         INPUT_INTEREST_RATE = None
 
-    QUESTION = input("Does your server need Member count? (YES/NO)\n")
-    if QUESTION.lower() == 'yes':
-        INPUT_MEMBER_COUNT_ID = input("Enter member count channel ID\n")
-    else:
-        INPUT_MEMBER_COUNT_ID = None
-
-    QUESTION = input("Does your server need Welcome service? (YESY/NO)\n")
-    if QUESTION.lower() == 'yes':
-        INPUT_WELCOME_CHANNEL_ID = input('Enter welcome channel ID. \n')
-    else:
-        INPUT_WELCOME_CHANNEL_ID = None
-
-    QUESTION = input("Does your server need Bye message service? (YESY/NO)\n")
-    if QUESTION.lower() == 'yes':
-        INPUT_LEAVE_CHANNEL_ID = input('Enter leave message channel ID. \n')
-    else:
-        INPUT_LEAVE_CHANNEL_ID = None
-
     QUESTION = input("Do you want to log server text messages\n")
     if QUESTION.lower() == 'yes':
         INPUT_LOG = True
     else:
         INPUT_LOG = False
 
-    QUESTION = input("Do you want the bots suggestion feature?\n")
-    if QUESTION.lower() == 'yes':
-        INPUT_SUGGESTION_CHANNEL_ID = input('Enter suggestion channel ID. \n')
-    else:
-        INPUT_SUGGESTION_CHANNEL_ID = None
-    QUESTION = input("ID of role to ping in tickets\n")
-    if QUESTION:
-        INPUT_TICKET_HANDLER_ID = QUESTION
-    else:
-        INPUT_TICKET_HANDLER_ID = None
-
     config = {
         'config_format': current_config_format,
         'prefix': INPUT_PREFIX,
         'bot_token': INPUT_BOT_TOKEN,
-        'welcome_channel': INPUT_WELCOME_CHANNEL_ID,
         'owner_id': INPUT_OWNER_ID,
-        'owner_name': INPUT_OWNER_NAME,
         'win_prob': INPUT_WIN_PROB,
         'interest_rate': INPUT_INTEREST_RATE,
         'economy_type': 'local',
-        'member_count_id': INPUT_MEMBER_COUNT_ID,
-        'leave_channel': INPUT_LEAVE_CHANNEL_ID,
-        'suggestion_channel': INPUT_SUGGESTION_CHANNEL_ID,
         'enable_economy': ENABLE_ECONOMY,
         'daily_reward_range-min': int(INPUT_DAILY_REWARD_RANGE_MIN),
         'daily_reward_range-max': int(INPUT_DAILY_REWARD_RANGE_MAX),
         'bot_group_name': INPUT_BOT_GROUP_NAME,
-        'ticket_handler': INPUT_TICKET_HANDLER_ID,
         'check_for_updates': True,
+        'timediff': 0,
         'chatbot': False,
         'plugins': False,
         'log': INPUT_LOG,
@@ -177,6 +167,51 @@ if not os.path.isfile('BotConfig.json'):
 # Load the config
 with open('BotConfig.json') as f:
     config = json.load(f)
+
+
+def create_button(label: str, style: discord.ButtonStyle, custom_id: str, callback=None, emoji=None, disabled=False):
+    button = Button(label=label, style=style, custom_id=custom_id, emoji=emoji, disabled=disabled)
+    if callback:
+        button.callback = callback
+    return button
+
+
+def create_button_view(label: str, style: discord.ButtonStyle, custom_id: str, callback, emoji=None, disabled=False):
+    button = Button(label=label, style=style, custom_id=custom_id, emoji=emoji, disabled=disabled)
+    if callback:
+        button.callback = callback
+    view = discord.ui.View(timeout=None)
+    view.add_item(button)
+    return view
+
+
+def create_select_view(placeholder: str, options: list[SelectOption], custom_id: str, callback, min_values: int = 1,
+                       max_values: int = 1, disabled=False):
+    select = discord.ui.Select(placeholder=placeholder, options=options, custom_id=custom_id, min_values=min_values,
+                               max_values=max_values, disabled=disabled)
+    if callback:
+        select.callback = callback
+    view = View(timeout=None)
+    view.add_item(select)
+    return view
+
+
+def create_modal_view(title: str, inputs: list[InputText], custom_id: str, callback):
+    class CustomModal(Modal):
+        def __init__(self):
+            super().__init__(title=title, custom_id=custom_id)
+            for input_field in inputs:
+                self.add_item(input_field)
+
+        async def on_submit(self, interaction: discord.Interaction):
+            if callback:
+                await callback(interaction, self)
+
+    return CustomModal()
+
+
+runlog_dir = 'runlogs'
+os.makedirs(runlog_dir, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO,
                     format=f"[{config['bot_group_name']} | %(asctime)s | %(levelname)s]: %(message)s")
@@ -296,82 +331,6 @@ class DeleteTicketView(discord.ui.View):
                                             ephemeral=True)
 
 
-@bot.event
-async def on_ready():
-    if config['plugins']:
-        if not os.path.exists(plugins_folder):
-            os.makedirs(plugins_folder)
-
-        for filename in os.listdir(plugins_folder):
-            if filename.startswith('on_ready_') and filename.endswith('.ext'):
-                log(f'Loading on ready extension {filename}')
-                filepath = os.path.join(plugins_folder, filename)
-                try:
-                    with open(filepath, 'r') as file:
-                        script = file.read()
-                    exec(script)
-                    log(f'Loaded: {filename}')
-                except Exception as e:
-                    logw(f'Failed to load: {filename}: {e}')
-
-    global timers
-    timers = load_timers_state()
-
-    for timer_name in timers.keys():
-        await bot.loop.create_task(update_timer(timer_name))
-
-    bot.add_view(CreateTicketView(bot))
-    bot.add_view(CloseTicketView(bot))
-    bot.add_view(DeleteTicketView(bot))
-    bot.add_view(CloseTicketRequestView(bot))
-
-    log(f'Logged in as {bot.user} (ID: {bot.user.id})')
-
-    if not bot.guilds:
-        client_id = bot.user.id
-        logw(
-            f'Bot not in any servers \nOAuth link: https://discord.com/oauth2/authorize?client_id={client_id}&permissions=8&scope=bot')
-
-    log('Starting Post Startup Setup')
-    for guild in bot.guilds:
-        if not any(role.name == OWNER_PERMS_GROUP for role in guild.roles):
-            bot_top_role = guild.get_member(bot.user.id).top_role
-            log(f'creating owner group in guild {guild}')
-            role = await guild.create_role(name=OWNER_PERMS_GROUP)
-            await role.edit(position=bot_top_role.position - 1)
-    for guild in bot.guilds:
-        if not any(role.name == MOD_PERMS_GROUP for role in guild.roles):
-            bot_top_role = guild.get_member(bot.user.id).top_role
-            log(f'creating mod group in guild {guild}')
-            role = await guild.create_role(name=MOD_PERMS_GROUP)
-            await role.edit(position=bot_top_role.position - 2)
-    for guild in bot.guilds:
-        if not any(role.name == MEMBER_PERMS_GROUP for role in guild.roles):
-            log(f'creating member group in guild {guild}')
-            await guild.create_role(name=MEMBER_PERMS_GROUP)
-
-    for guild in bot.guilds:
-        if not any(role.name == "Muted" for role in guild.roles):
-            bot_top_role = guild.get_member(bot.user.id).top_role
-            log(f'creating muted role in guild {guild}')
-            permissions = discord.Permissions(send_messages=False, speak=False)
-            mute_role = await guild.create_role(name="Muted", permissions=permissions)
-            await mute_role.edit(position=bot_top_role.position - 3)
-            for channel in guild.channels:
-                log(f'setting muted perms in guild {guild} channel {channel}')
-                try:
-                    await channel.set_permissions(mute_role, send_messages=False, speak=False)
-                except Exception as e:
-                    logw(e)
-
-    log('Post Startup Finished!')
-
-    if config['member_count_id'] is not None:
-        channel = bot.get_channel(int(config['member_count_id']))
-        member_count = len(channel.guild.members)
-        await channel.edit(name=f'Members: {member_count}')
-
-
 def hex_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
@@ -380,18 +339,11 @@ def hex_to_rgb(hex_color):
 AUTO_ROLE_DATA_FILE = 'auto_roles.json'
 
 server_roles = {}
-
-
-def load_roles():
-    global server_roles
-    if os.path.isfile(AUTO_ROLE_DATA_FILE):
-        with open(AUTO_ROLE_DATA_FILE, 'r') as file:
-            server_roles = json.load(file)
-    else:
-        server_roles = {}
-
-
-load_roles()
+if os.path.isfile(AUTO_ROLE_DATA_FILE):
+    with open(AUTO_ROLE_DATA_FILE, 'r') as file:
+        server_roles = json.load(file)
+else:
+    server_roles = {}
 
 
 def save_roles():
@@ -399,101 +351,112 @@ def save_roles():
         json.dump(server_roles, file)
 
 
+def ttime():
+    timediff = float(config.get('timediff'))
+    time = datetime.now().astimezone(timezone(timedelta(hours=+timediff)))
+    return time
+
+
+def load_embeds():
+    try:
+        with open("embeds.json", "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def save_embeds(embeds):
+    with open("embeds.json", "w") as f:
+        json.dump(embeds, f, indent=4)
+
+
+embeds = load_embeds()
+
+
+def replace_placeholders(content, user):
+    return content.replace("%user%", str(user)) \
+        .replace("%username%", user.name) \
+        .replace("%userid%", str(user.id)) \
+        .replace("%usermention%", user.mention) \
+        .replace("%usericon%", user.avatar.url) \
+        .replace("%time%", ttime().strftime('%d-%m-%Y %I:%M:%S %p')) \
+        .replace("%servericon%", user.guild.icon.url) \
+        .replace("%servername%", str(user.guild.name))
+
+
+def get_embed(name: str, user):
+    if name not in embeds:
+        embed_data = {"title": "", "description":name, "color":0, "fields":[], "footer":"", "image":"", "thumbnail":""}
+    else:
+        embed_data = embeds[name]
+
+    embed = discord.Embed(
+        title=replace_placeholders(embed_data.get("title", ""), user),
+        description=replace_placeholders(embed_data.get("description", ""), user),
+        color=embed_data.get("color", 0x3498db)
+    )
+    for field in embed_data.get("fields", []):
+        embed.add_field(name=replace_placeholders(field["name"], user),
+                        value=replace_placeholders(field["value"], user),
+                        inline=field.get("inline", False))
+    if embed_data.get("footer"):
+        embed.set_footer(text=replace_placeholders(embed_data["footer"], user))
+
+    if embed_data.get("image"):
+        url = embed_data["image"]
+        if url.startswith("%"):
+            url = replace_placeholders(embed_data["image"], user)
+        embed.set_image(url=url)
+
+    if embed_data.get("thumbnail"):
+        url = embed_data["thumbnail"]
+        if url.startswith("%"):
+            url = replace_placeholders(embed_data["thumbnail"], user)
+        embed.set_thumbnail(url=url)
+    return embed
+
+
+server_config_file = 'server_configs.json'
+
+
+def load_server_configs():
+    if os.path.exists(server_config_file):
+        with open(server_config_file, 'r') as file:
+            return json.load(file)
+    else:
+        return {}
+
+
+def save_server_configs(config):
+    with open(server_config_file, 'w') as file:
+        file.write(json.dumps(config))
+
+
+server_configs = load_server_configs()
+
+
 @bot.event
 async def on_member_join(member):
-    guild_id = str(member.guild.id)
-    if guild_id in server_roles:
-        roles = server_roles[guild_id]
-        for role_id in roles:
-            role_object = discord.utils.get(member.guild.roles, id=role_id)
-            if role_object is not None:
-                await member.add_roles(role_object)
+    guild: discord.Guild = member.guild
+    server_config: dict = server_configs.get(str(guild.id))
+    channel = bot.get_channel(int(server_config.get('welcome_channel_id')))
+    embed_name = server_config.get('welcome_embed')
+    if not channel or not embed_name:
+        return
 
-    global placeholders
-
-    if config['welcome_channel'] is not None:
-        channel = bot.get_channel(int(config['welcome_channel']))
-        try:
-            with open('welcomemsg.json', 'r') as f:
-                config1 = json.load(f)
-        except:
-            ex = {
-                "embeds": {
-                    "title": "name",
-                    "colourCode": "",
-                    "line 1/ new field/ field name": {"desc": "", "inline": True}
-                },
-                "message": {
-                    "Line1": "text"
-                }
-            }
-            with open('welcomemsg.json', 'w') as f:
-                f.write(json.dumps(ex, indent=4, ensure_ascii=False, separators=(',', ': ')) + '\n')
-
-        if config1.get('embeds'):
-            embed_data = config1['embeds']
-
-            colour_code = embed_data.get('colourCode', '#000000')
-            color_rgb = hex_to_rgb(colour_code)
-
-            embed = discord.Embed(title=embed_data.get('title', ''),
-                                  color=discord.Color.from_rgb(*color_rgb))
-
-            placeholders = {
-                '.UserMention.': member.mention,
-                '.UserName.': member.name,
-                '.UserNickname.': member.display_name,
-                '.Date.': member.joined_at.strftime('%Y-%m-%d'),
-                '.Time.': member.joined_at.strftime('%H:%M:%S'),
-                '.channel-<channel id>.': '<#channel-id>',
-                '.role-<Role id>.': '<@&role-id>',
-            }
-
-            for placeholder, value in placeholders.items():
-                embed.title = embed.title.replace(placeholder, value)
-
-            if 'Welcome lets chill (: ' in embed_data:
-                desc = embed_data['Welcome lets chill (: ']['desc']
-                for placeholder, value in placeholders.items():
-                    desc = desc.replace(placeholder, value)
-                embed.description = desc
-
-            for field, field_data in embed_data.items():
-                if field != 'title' and field != 'colourCode' and field != 'Welcome lets chill (: ':
-                    desc = field_data.get('desc', '')
-                    inline = field_data.get('inline', False)
-
-                    for placeholder, value in placeholders.items():
-                        desc = desc.replace(placeholder, value)
-
-                    if desc.strip() or inline:
-                        embed.add_field(name=field, value=desc, inline=inline)
-
-            await channel.send(embed=embed)
-
-        if config1.get('message'):
-            message_data = config1['message']
-            message = ''
-
-            for line_name, line_content in message_data.items():
-                message += line_content + '\n'
-
-            for placeholder, value in placeholders.items():
-                message = message.replace(placeholder, value)
-
-            await channel.send(message)
+    await channel.send(embed=get_embed(embed_name, member))
 
 
 @bot.event
 async def on_member_remove(member):
-    if config['leave_channel'] is not None:
-        channel = bot.get_channel(int(config['leave_channel']))
-        await channel.send(f'{member.mention} has left the server. Goodbye 😭')
+    guild: discord.Guild = member.guild
+    server_config: dict = server_configs.get(str(guild.id))
+    channel = bot.get_channel(int(server_config.get('leave_channel_id')))
+    embed_name = server_config.get('leave_embed')
+    if not channel or not embed_name:
+        return
 
-    if config['member_count_id'] is not None:
-        channel = bot.get_channel(int(config['member_count_id']))
-        member_count = len(channel.guild.members)
-        await channel.edit(name=f'Members: {member_count}')
+    await channel.send(embed=get_embed(embed_name, member))
 
 
 def has_required_perm():
@@ -727,6 +690,21 @@ async def random(ctx, mi=None, ma=None):
         await ctx.send(f'Your random number is: {output}')
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+
+
+@bot.slash_command(name='random',
+                   integration_types={discord.IntegrationType.guild_install, discord.IntegrationType.user_install})
+async def random_slash(ctx, mi, ma):
+    try:
+        prefix = config['prefix']
+        if mi is None or ma is None or int(mi) >= int(ma) or not isinstance(
+                int(mi), int) or not isinstance(int(ma), int):
+            await ctx.send(f'Incorrect usage. Please use `{prefix}random [minimum] [maximum]` with integer values.')
+            return
+        output = rand.randint(int(mi), int(ma))
+        await ctx.respond(f'Your random number is: {output}')
+    except Exception as e:
+        await ctx.respond(f"An error occurred: {e}")
 
 
 @bot.command(name='addrole', aliases=['role'])
@@ -980,8 +958,6 @@ if IsEconomy:
                 await ctx.send(
                     f"{ctx.author.mention}, you have returned {data['total_amount']} coins, including {data['interest']} "
                     f"coins of interest. Your new balance is {data['balance']} coins.")
-
-
 
     elif config['economy_type'] == 'local':
         if not os.path.exists("balances.json"):
@@ -1296,32 +1272,96 @@ if IsEconomy:
 
 @bot.command(name='clear', aliases=['nuke'])
 @has_required_perm()
-async def clear(ctx, amount=None):
-    def check_message(msg):
+async def clear(ctx, target=None, amount: int = None):
+    await ctx.message.delete()
+
+    def check_message_pin(msg):
         return not msg.pinned
 
+    if target and target.isdigit():
+        amount = int(target)
+        target = None
+
     if amount is None:
-        amount = 9999999999999999999999999999999999999999999999999
+        amount = float('inf')
+
+    async def limited_purge(check):
+        deleted = []
+        async for msg in ctx.channel.history():
+            if len(deleted) >= amount:
+                break
+            if check(msg) and not msg.pinned:
+                await msg.delete()
+                deleted.append(msg)
+        return deleted
+
+    if target in ["bots", "bot"]:
+        deleted = await limited_purge(lambda msg: msg.author.bot)
+
+    elif target in ["users", "user"]:
+        deleted = await limited_purge(lambda msg: not msg.author.bot)
+
+    elif target:
+        try:
+            member = await commands.MemberConverter().convert(ctx, target)
+
+            deleted = await limited_purge(lambda msg: msg.author == member)
+        except commands.BadArgument:
+            await ctx.send("User not found.")
+            return
+
     else:
-        amount = int(amount)
+        deleted = await ctx.channel.purge(limit=amount, check=check_message_pin)
 
-    deleted = await ctx.channel.purge(limit=amount + 1, check=check_message)
+    response = f'Cleared {len(deleted)} messages. ' + ('By ' if target else None) + target if target else None
 
-    await ctx.send(f'Cleared {len(deleted) - 1} messages.')
+    await ctx.send(response)
 
 
 @bot.command(name='clears', aliases=['nukes'])
 @has_required_perm()
-async def clears(ctx, amount=None):
-    def check_message(msg):
+async def clear(ctx: discord.context, target=None, amount: int = None):
+    await ctx.message.delete()
+
+    def check_message_pin(msg):
         return not msg.pinned
 
-    if amount is None:
-        amount = 9999999999999999999999999999999999999999999999999
-    else:
-        amount = int(amount)
+    if target and target.isdigit():
+        amount = int(target)
+        target = None
 
-    await ctx.channel.purge(limit=amount + 1, check=check_message)
+    if amount is None:
+        amount = float('inf')
+
+    async def limited_purge(check):
+        deleted = []
+        async for msg in ctx.channel.history(limit=1000):
+            if len(deleted) >= amount:
+                break
+            if check(msg) and not msg.pinned:
+                await msg.delete()
+                deleted.append(msg)
+        return deleted
+
+    if target in ["bots", "bot"]:
+        deleted = await limited_purge(lambda msg: msg.author.bot)
+
+    elif target in ["users", "user"]:
+        deleted = await limited_purge(lambda msg: not msg.author.bot)
+
+    elif target:
+        try:
+            member = await commands.MemberConverter().convert(ctx, target)
+
+            deleted = await limited_purge(lambda msg: msg.author == member)
+        except commands.BadArgument:
+            await ctx.send("User not found.", delete_after=5)
+            return
+
+    else:
+        deleted = await ctx.channel.purge(limit=amount, check=check_message_pin)
+
+    log(f'Silent Deleted {len(deleted)} messages from guild {ctx.guild.name} | Target: {target if target else "All"} | By {ctx.author.name}')
 
 
 @bot.command(name='update', aliases=['ver', 'version'])
@@ -1496,9 +1536,9 @@ async def say(ctx, msg: str):
         await ctx.respond("Done", ephemeral=True)
         await ctx.respond(msg)
         return
+    logcommand(message=ctx, command="say")
     await ctx.respond("Done", ephemeral=True)
     await ctx.send(msg)
-    logcommand(message=ctx, command="say")
 
 
 tod = bot.create_group(name="tod")
@@ -1638,9 +1678,6 @@ async def user_info(ctx, user: str = None):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-
-    member = None
-    user_id = None
     if user is not None:
         try:
             user_id = int(user.strip('<@!>'))
@@ -1653,8 +1690,8 @@ async def user_info(ctx, user: str = None):
     else:
         member = ctx.author
 
-    created_at_utc = member.created_at.astimezone(pytz.UTC)
-    utc_now = datetime.now(pytz.UTC)
+    created_at_utc = member.created_at.astimezone(timezone.utc)
+    utc_now = datetime.now(timezone.utc)
     account_age = (utc_now - created_at_utc).days
 
     if isinstance(member, discord.Member):
@@ -1662,16 +1699,35 @@ async def user_info(ctx, user: str = None):
         if not roles:
             roles = 'The user has no roles'
         server_owner = 'Yes' if ctx.guild.owner_id == member.id else 'No'
+
+        joined_at_utc = member.joined_at.astimezone(timezone.utc) if member.joined_at else None
+        if joined_at_utc:
+            joined_days_ago = (utc_now - joined_at_utc).days
+            joined_info = f"Joined: {joined_at_utc.strftime('%d-%m-%Y %I:%M:%S %p')} ({joined_days_ago} days ago)"
+        else:
+            joined_info = "Joined information not available."
     else:
         roles = 'User not in server'
         server_owner = 'User not in server'
+        joined_info = 'User not in server'
 
-    embed = discord.Embed(title=f'User Info - {member.name}', color=0x7289DA)
-    embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+    embed_color = None
+    avg_color = await get_average_color(avatar_url)
+    if avg_color:
+        embed_color = (avg_color[0] << 16) + (avg_color[1] << 8) + avg_color[2]
+
+    embed = discord.Embed(
+        title=f'User Info - {member.name}',
+        color=discord.Color(embed_color) if embed_color else discord.Color(0x7289DA)
+    )
+    embed.set_thumbnail(url=avatar_url)
     embed.add_field(name='User ID', value=member.id, inline=False)
+    embed.add_field(name='Created On', value=f'{created_at_utc.strftime('%d-%m-%Y %I:%M:%S %p')}', inline=False)
     embed.add_field(name='Account Age', value=f'{account_age} days', inline=False)
     embed.add_field(name='Roles', value=roles, inline=False)
     embed.add_field(name='Server Owner', value=server_owner, inline=False)
+    embed.add_field(name='Server Join Date', value=joined_info, inline=False)
 
     await ctx.send(embed=embed)
 
@@ -1816,13 +1872,19 @@ async def execu(ctx, *, val: str = None):
 
 
 @is_owner()
-@bot.command()
+@bot.command(name="cmd")
+async def execcmd(ctx, *, val: str = None):
+    await ctx.message.delete()
+    os.system(val)
+
+
+@is_owner()
+@bot.command(name='crf')
 async def createfile(ctx):
     if len(ctx.message.attachments) > 0:
         attachment = ctx.message.attachments[0]
         await attachment.save(attachment.filename)
-    else:
-        return
+
     await ctx.message.delete()
 
 
@@ -1866,24 +1928,72 @@ async def direct_message(ctx, user: discord.User, *, content: str = ''):
         await ctx.send("Unable to send a direct message. Make sure the user has DMs enabled.")
 
 
+async def get_average_color(image_url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image_url) as response:
+            if response.status == 200:
+                img_data = await response.read()
+                image = Image.open(BytesIO(img_data))
+                # Resize to speed up processing
+                image = image.resize((50, 50))  # Resize to 50x50 for faster computation
+                pixels = list(image.getdata())
+                avg_color = tuple(sum(c) // len(c) for c in zip(*pixels))
+                return avg_color
+    return None
+
+
 @bot.command()
 async def si(ctx):
-    server_info = ctx.guild
+    server_info: discord.Guild = ctx.guild
     member_count = len(server_info.members)
     server_name = server_info.name
-    server_owner = server_info.owner
+    server_owner = server_info.owner.mention
     text_channel_count = len(server_info.text_channels)
+    channel_count = len(server_info.channels)
     voice_channel_count = len(server_info.voice_channels)
     category_count = len(server_info.categories)
+    verification_level = server_info.verification_level
+    stickers = len(server_info.stickers)
+    emojis = len(server_info.emojis)
+    boost_count = server_info.premium_subscription_count or 0
+    boost_tier = server_info.premium_tier
+
     role_count = len(server_info.roles)
 
-    embed = discord.Embed(title='Server Information', description=f'{server_name}')
+    creation_date = server_info.created_at
+    current_date = datetime.now(timezone.utc)
+    age = current_date - creation_date
+    age_days = age.days
+    server_icon = server_info.icon.url if server_info.icon else None
+
+    embed_color = None
+    if server_icon:
+        avg_color = await get_average_color(server_icon)
+        if avg_color:
+            embed_color = (avg_color[0] << 16) + (avg_color[1] << 8) + avg_color[2]
+
+    embed = discord.Embed(
+        title='Server Information',
+        description=f'{server_name}',
+        color=discord.Color(embed_color) if embed_color else discord.Color.default()
+    )
     embed.add_field(name='Member Count', value=f'{member_count}', inline=True)
-    embed.add_field(name='Server Owner', value=server_owner, inline=False)
+    embed.add_field(name='Server Owner', value=server_owner, inline=True)
+    embed.add_field(name='Channel Count', value=f'{channel_count}', inline=True)
     embed.add_field(name='Text Channel Count', value=f'{text_channel_count}', inline=True)
     embed.add_field(name='Voice Channel Count', value=f'{voice_channel_count}', inline=True)
     embed.add_field(name='Category Count', value=f'{category_count}', inline=True)
     embed.add_field(name='Role Count', value=f'{role_count}', inline=True)
+    embed.add_field(name='Verification Level', value=f'{verification_level}', inline=True)
+    embed.add_field(name='Stickers', value=f'{stickers}/{server_info.sticker_limit}', inline=True)
+    embed.add_field(name='Emojis ', value=f'{emojis}/{server_info.emoji_limit}', inline=True)
+    embed.add_field(name='Boost Level', value=f'{boost_tier}', inline=True)
+    embed.add_field(name='Boost Count', value=f'{boost_count}', inline=True)
+    embed.set_footer(
+        text=f'Date Created: {creation_date.strftime("%d-%m-%Y %I:%M:%S %p")} | Age: {age_days} days | ID: {server_info.id}')
+    if server_icon:
+        embed.set_thumbnail(url=server_icon)
+
     await ctx.send(embed=embed)
 
 
@@ -2112,43 +2222,103 @@ if config['chatbot']:
             except asyncio.TimeoutError:
                 await ctx.send('You took too long to respond. Answer recording canceled.')
 
+import json
+import os
+import discord
+
+ticket_ids = {}
+# Load or initialize the ticket data
+if not os.path.exists('ticket_numbers.json'):
+    with open('ticket_numbers.json', 'w') as f:
+        json.dump({}, f)
+
+with open('ticket_numbers.json', 'r') as f:
+    ticket_ids = json.load(f)
+
+
+def save_ticket_data():
+    """Save the updated ticket data to the JSON file."""
+    with open('ticket_numbers.json', 'w') as f:
+        json.dump(ticket_ids, f)
+
 
 async def handle_ticket_creation(interaction, bot):
     guild = interaction.guild
+    guild_id = str(guild.id)
+    user_id = str(interaction.user.id)
+
+    # Initialize guild data if not present
+    if guild_id not in ticket_ids:
+        ticket_ids[guild_id] = {'counter': 1, 'users': {}}
+
+    guild_data = ticket_ids[guild_id]
+
+    if user_id in guild_data['users']:
+        channel_id = guild_data['users'][user_id]
+        channel = interaction.guild.get_channel(channel_id)
+
+        if channel is None:
+            del guild_data['users'][user_id]
+        else:
+            archived_category_name = "Archived Tickets"
+            if channel.category and channel.category.name == archived_category_name:
+                del guild_data['users'][user_id]
+            else:
+                try:
+                    await interaction.response.send_message(
+                        "You already have an open ticket.", ephemeral=True
+                    )
+                    return
+                except discord.errors.NotFound:
+                    await interaction.followup.send(
+                        "You already have an open ticket.", ephemeral=True
+                    )
+                    return
+
+
     category = discord.utils.get(guild.categories, name="Tickets")
     if not category:
         category = await guild.create_category(name="Tickets")
 
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(read_messages=False),  # Deny access to @everyone
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
         interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
     }
 
-    existing_channels = [channel for channel in category.channels if
-                         channel.name == f"ticket-{interaction.user.name}"]
-    if existing_channels:
-        try:
-            await interaction.response.send_message("You already have an open ticket.", ephemeral=True)
-        except discord.errors.NotFound:
-            await interaction.followup.send("You already have an open ticket.", ephemeral=True)
-        return
-
     try:
-        channel = await category.create_text_channel(f'ticket-{interaction.user.name}', overwrites=overwrites)
+        ticket_number = guild_data['counter']
+        channel_name = f'ticket-{ticket_number}-{interaction.user.name}'
+        channel = await category.create_text_channel(channel_name, overwrites=overwrites)
+
+        guild_data['users'][user_id] = channel.id
+        guild_data['counter'] += 1
+        save_ticket_data()
+
+        server_configs = load_server_configs()
+        ticket_message = f"Ticket opened by <@{interaction.user.id}>. A staff member will assist you shortly."
+        if server_configs.get(str(interaction.guild.id)) is not None:
+            if server_configs[str(interaction.guild.id)].get('ticket_message'):
+                message = server_configs[str(interaction.guild.id)]['ticket_message']
+                ticket_message = replace_placeholders(message, interaction.user)
+        print(ticket_message)
+        await channel.send(ticket_message)
+
+
+        if server_configs.get(str(interaction.guild.id)) is not None:
+            if server_configs[str(interaction.guild.id)].get('ticket_handler'):
+                role = server_configs[str(interaction.guild.id)]['ticket_handler']
+                await channel.send(f'<@&{role}>')
+
         msg = f"Your ticket has been created at {channel.mention}. A staff member will assist you shortly."
-        await channel.send(f"Ticket opened by <@{interaction.user.id}>. A staff member will assist you shortly.")
-        if config['ticket_handler'] is not None:
-            role = config['ticket_handler']
-            await channel.send(f'<@&{role}>')
         try:
             await interaction.response.send_message(msg, ephemeral=True)
         except discord.errors.NotFound:
             await interaction.followup.send(msg, ephemeral=True)
 
-        # Add CloseTicketView to the ticket channel
         view = CloseTicketRequestView(bot)
         await channel.send("Click the button below to close this ticket.", view=view)
+
     except discord.HTTPException as e:
         try:
             await interaction.response.send_message(
@@ -2156,10 +2326,12 @@ async def handle_ticket_creation(interaction, bot):
         except discord.errors.NotFound:
             await interaction.followup.send(
                 "An error occurred while creating the ticket channel. Please try again later.", ephemeral=True)
-        loge("HTTPException while creating ticket channel")
+        loge(f"HTTPException while creating ticket channel: {e}")
 
 
 async def handle_ticket_closure_request(interaction, bot):
+    guild_id = str(interaction.guild.id)
+    user_id = str(interaction.user.id)
     if not interaction.channel.name.startswith('ticket-'):
         try:
             await interaction.response.send_message('This command can only be used in a ticket channel.',
@@ -2170,6 +2342,8 @@ async def handle_ticket_closure_request(interaction, bot):
     if interaction.custom_id == 'close_request_button':
         view = CloseTicketView(interaction)
         await interaction.channel.send(f'{interaction.user.mention} has requested ticket closure request', view=view)
+        ticket_ids[guild_id]['users'].pop(user_id)
+        save_ticket_data()
         try:
             await interaction.response.send_message("Your request to close the ticket has been sent to moderators.",
                                                     ephemeral=True)
@@ -2206,13 +2380,13 @@ async def handle_ticket_closure(interaction, bot):
             # Remove user's access from the channel and revoke permissions from everyone
             overwrites = {
                 interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                # Deny access to @everyone
                 interaction.user: discord.PermissionOverwrite(read_messages=False),
                 interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
             }
 
             await interaction.channel.edit(category=archive_category, overwrites=overwrites)
-            await interaction.followup.send("Ticket archived successfully.")
+            await interaction.channel.send("Ticket archived successfully.")
+            await transcribe_ticket(interaction)
 
             # Add DeleteTicketView to the archived ticket channel for staff
             view = DeleteTicketView(bot)
@@ -2273,6 +2447,33 @@ async def setup_ticket_system(ctx, message=None):
     logcommand(message=ctx, command="setup-ticket-system")
 
 
+@ticket_commands.command(name='set-ticket-handler', description='Sets the role to ping in tickets')
+@has_required_perm()
+async def setup_ticket_ping(ctx, role: discord.Role):
+    server_id = str(ctx.guild.id)
+    if not role:
+        await ctx.respond("No role selected please select a role", ephemeral= True)
+        return
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+    server_configs[server_id]['ticket_handler'] = role.id
+    save_server_configs(server_configs)
+    await ctx.respond("Ticket handler defined successfully", ephemeral=True)
+    logcommand(message=ctx, command="setup-ticket-handler")
+
+
+@ticket_commands.command(name='set-ticket-message', description='Sets the message sent in tickets')
+@has_required_perm()
+async def setup_ticket_message(ctx, message: str):
+    server_id = str(ctx.guild.id)
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+    server_configs[server_id]['ticket_message'] = message
+    save_server_configs(server_configs)
+    await ctx.respond("Ticket message defined successfully", ephemeral=True)
+    logcommand(message=ctx, command="setup-ticket-message")
+
+
 @ticket_commands.command(name='send-close-request', description='Send a close request button in the current channel.')
 async def send_close_request(ctx):
     view = CloseTicketView(ctx)
@@ -2328,6 +2529,7 @@ async def ticket_force_close(ctx):
 
     await ctx.channel.edit(category=archive_category, overwrites=overwrites)
     await ctx.respond('Ticket archived successfully.')
+    await transcribe_ticket(ctx)
 
 
 @ticket_commands.command(name='delete')
@@ -2378,10 +2580,70 @@ async def ticket_force_delete_all(ctx):
         await ctx.respond('No tickets found!')
         return
 
+    await ctx.respond('Deleting all tickets')
+
     for channel in archive_category.channels:
         await channel.delete()
 
     await ctx.respond('Tickets deleted successfully.')
+
+
+@ticket_commands.command(name='transcribe-all')
+async def transcribe_tickets(ctx: discord.Interaction):
+    guild = ctx.guild
+    archived_category = discord.utils.get(guild.categories, name="Archived Tickets")
+
+    if not archived_category:
+        await ctx.respond("Archived Tickets category not found.")
+        return
+
+    if not os.path.exists(f'transcripts/{sanitize_filename(ctx.guild.name)}'):
+        os.makedirs(f'transcripts/{sanitize_filename(ctx.guild.name)}')
+
+    await ctx.respond(f"Transcribing tickets")
+
+    for channel in archived_category.text_channels:
+        transcript = [f"Transcript for channel: #{channel.name}", f"Channel ID: {channel.id}",
+                      f"Created at: {channel.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "=" * 50]
+
+        async for message in channel.history(oldest_first=True):
+            timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            transcript.append(f"[{timestamp}] {message.author.name}: {message.content}")
+            transcript.append("-" * 50)
+
+        transcript.append("=" * 50)
+        transcript.append(f"End of transcript for channel: #{channel.name}")
+
+        filename = f"{channel.name}-{channel.id}.txt"
+        with open(os.path.join('transcripts', sanitize_filename(ctx.guild.name), filename), "w", encoding="utf-8") as f:
+            f.write("\n".join(transcript))
+
+    await ctx.respond(f"Transcripts saved for all channels in {archived_category.name}.")
+
+
+@ticket_commands.command(name='transcribe')
+async def transcribe_ticket(ctx: discord.Interaction, silent: bool = False):
+    if not os.path.exists(f'transcripts/{sanitize_filename(ctx.guild.name)}'):
+        os.makedirs(f'transcripts/{sanitize_filename(ctx.guild.name)}')
+
+    channel = ctx.channel
+
+    transcript = [f"Transcript for channel: #{channel.name}", f"Channel ID: {channel.id}",
+                  f"Created at: {channel.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "=" * 50]
+
+    async for message in channel.history(oldest_first=True):
+        timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        transcript.append(f"[{timestamp}] {message.author.name}: {message.content}")
+        transcript.append("-" * 50)
+
+    transcript.append("=" * 50)
+    transcript.append(f"End of transcript for channel: #{channel.name}")
+
+    filename = f"{channel.name}-{channel.id}.txt"
+    with open(os.path.join('transcripts', sanitize_filename(ctx.guild.name), filename), "w", encoding="utf-8") as f:
+        f.write("\n".join(transcript))
+    if not silent:
+        await ctx.channel.send(f"Transcribed ticket {channel.name}")
 
 
 afk_file = 'afk_users.json'
@@ -2673,16 +2935,18 @@ user_language_settings = {}
 
 
 @bot.command(name='translang')
-async def set_translation_language(ctx, language: str = None):
+async def set_translation_language(ctx: discord.ApplicationContext, language: str = None, user: discord.User = None):
+    userid = user.id if user else ctx.author.id
     if language.lower() == 'none':
-        if ctx.author.id in user_language_settings:
-            del user_language_settings[ctx.author.id]
+        if userid in user_language_settings:
+            del user_language_settings[userid]
         await ctx.send("Default translation language disabled.")
     else:
         language_code = language.lower()
         if language_code in SUPPORTED_LANGUAGES:
-            user_language_settings[ctx.author.id] = language_code
-            await ctx.send(f"Default translation language set to '{SUPPORTED_LANGUAGES[language_code]}'")
+            user_language_settings[userid] = language_code
+            await ctx.send(
+                f"Default translation language set to '{SUPPORTED_LANGUAGES[language_code]}' for user <@{userid}>")
         else:
             await ctx.send(f"Invalid language. Please choose from supported languages or 'none'.")
 
@@ -2709,6 +2973,34 @@ if 'dev' in current_version:
         except Exception as e:
             await ctx.send(f"Failed to update. Error: {e}")
 
+if config['plugins']:
+    @is_owner()
+    @bot.command()
+    async def getplugin(ctx: discord.ApplicationContext, plugin: str = ''):
+        url = api + f"/get_plugin/{plugin}"
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                with open(f'plugins/{plugin}.py', 'w', encoding='utf-8') as script_file:
+                    script_file.write(response.text)
+                await ctx.send("Plugin downloaded, please restart bot")
+            else:
+                await ctx.send(f"Failed to download plugin. Status code: {response.status_code}")
+        except Exception as e:
+            await ctx.send(f"Failed to update. Error: {e}")
+
+
+    @is_owner()
+    @bot.command()
+    async def rmplugin(ctx: discord.ApplicationContext, plugin: str = ''):
+        if not os.path.exists(f'plugins/{plugin}.py'):
+            return await ctx.send('Plugin not found')
+        try:
+            os.remove(f'plugins/{plugin}.py')
+            await ctx.send(f'Plugin: {plugin} removed successfully! ')
+        except Exception as e:
+            await ctx.send(f'An error occurred: {e}')
+
 
 @bot.command(name='autoroleadd')
 @has_required_perm()
@@ -2734,6 +3026,428 @@ async def autoroleremove(ctx, role: discord.Role):
         await ctx.send(f'Role {role.mention} removed from auto-roles for this server.')
     else:
         await ctx.send(f'Role {role.mention} is not in the auto-roles list.')
+
+
+@bot.command(name='autoroles')
+@has_required_perm()
+async def autoroles(ctx):
+    guild_id = str(ctx.guild.id)
+    if guild_id in server_roles and server_roles[guild_id]:
+        roles_list = []
+        for role_id in server_roles[guild_id]:
+            role_object: discord.Role = get(ctx.guild.roles, id=role_id)
+            if role_object:
+                roles_list.append(role_object.name)
+            else:
+                roles_list.append(f"`Role ID {role_id} (deleted)`")
+
+        roles_display = "\n".join(roles_list)
+        await ctx.send(f"Auto-roles for this server:\n{roles_display}")
+    else:
+        await ctx.send("There are no auto-roles configured for this server.")
+
+
+@bot.command('buttons')
+@has_required_perm()
+async def buttons_(ctx, *, arg: str):
+    arg = arg.split(' ')
+    if arg[0] == 'list':
+        msg = '# Registered Buttons are:-\n'
+        for item in button_configurations:
+            button = item['custom_id']
+            msg += f'{button}\n'
+        await ctx.send(msg)
+    elif arg[0] == 'send':
+        if arg[1] in button_views:
+            await ctx.send(view=button_views[arg[1]])
+        else:
+            await ctx.send('Given button not registered')
+    elif arg[0] == 'combine' and arg[1] == 'send':
+        buttons_to_combine = arg[2:]
+        combined_view = View()
+        for button_id in buttons_to_combine:
+            if button_id in button_views:
+                for child in button_views[button_id].children:
+                    if isinstance(child, Button):
+                        combined_view.add_item(child)
+            else:
+                await ctx.send(f'Button with id {button_id} not registered')
+                return
+        await ctx.send(view=combined_view)
+    elif arg[0] == 'create':
+        label = arg[1]
+        if arg[2] == 'red':
+            style = discord.ButtonStyle.red
+        elif arg[2] == 'blue':
+            style = discord.ButtonStyle.blurple
+        elif arg[2] == 'green':
+            style = discord.ButtonStyle.green
+        elif arg[2] == 'gray':
+            style = discord.ButtonStyle.gray
+        custom_id = arg[3]
+        callback = default_callback
+        emoji = arg[4]
+        view = create_button_view(label, style, custom_id, callback, emoji)
+        await ctx.send(view=view)
+    else:
+        await ctx.send('Invalid command or arguments')
+
+
+@bot.command()
+async def search(ctx, *, query: str):
+    """Searches DuckDuckGo for the given query and returns the top result."""
+    search_url = f'https://api.duckduckgo.com/?q={query}&format=json&pretty=1'
+    response = requests.get(search_url)
+    data = response.json()
+    print(data)
+    if data['AbstractText']:
+        title = data['Heading']
+        snippet = data['AbstractText']
+        link = data['AbstractURL']
+        await ctx.send(f'**{title}**\n{snippet}\n<{link}>')
+    else:
+        await ctx.send('No results found.')
+
+
+personal_vcs = {}
+DATA_FILE = 'guild_vcs_data.json'
+
+
+def load_vc_data():
+    global guild_vcs
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r') as f:
+            guild_vcs = json.load(f)
+            return guild_vcs
+    else:
+        return {}
+
+
+guild_vcs = load_vc_data()
+
+
+def save_vc_data():
+    with open(DATA_FILE, 'w') as f:
+        json.dump(guild_vcs, f)
+
+
+@bot.command(name="setupvc")
+@has_required_perm()
+async def setupvc(ctx, user_limit: int = 0):
+    guild_id = str(ctx.guild.id)
+    category = None
+
+    join_to_create_channel = await ctx.guild.create_voice_channel('Join to Create VC', category=category)
+
+    if guild_id not in guild_vcs:
+        guild_vcs[guild_id] = {}
+
+    guild_vcs[guild_id][str(join_to_create_channel.id)] = {"user_limit": user_limit}
+
+    save_vc_data()
+
+    await ctx.send(
+        f"Join to Create VC created: {join_to_create_channel.mention}. Private VCs will have a user limit of {user_limit if user_limit > 0 else 'unlimited'}.")
+
+
+@has_required_perm()
+@bot.command('join')
+async def join_vc(ctx: discord.ApplicationContext, vc: discord.VoiceChannel = None):
+    if not vc:
+        user = ctx.author
+        if user.voice and user.voice.channel:
+            await user.voice.channel.connect()
+        else:
+            await ctx.send('You are not connected to a voice channel!')
+    else:
+        try:
+            await vc.connect()
+        except Exception as e:
+            await ctx.send(f'An error occurred: {e}')
+
+
+@has_required_perm()
+@bot.command('discon')
+async def disconnect_vc(ctx: discord.ApplicationContext, user: discord.Member = None):
+    if not user:
+        client = ctx.guild.voice_client
+        if client:
+            await client.disconnect()
+    elif user.voice:
+        channel = user.voice.channel.name
+        await user.move_to(None)
+        await ctx.send(f' disconnected {user.display_name} from {channel}')
+    else:
+        await ctx.send(f'{user.display_name} is not connected to a voice channel')
+
+
+@has_required_perm()
+@bot.group()
+async def embed(ctx):
+    if ctx.invoked_subcommand is None:
+        await ctx.send(f"Invalid embed command. Use `{config.get('prefix')}embed create`, `"
+                       f"{config.get('prefix')}embed edit`, `{config.get('prefix')}embed delete`, or `{config.get(
+                           'prefix')}embed send`.")
+
+
+@has_required_perm()
+@embed.command(name='create')
+async def create_embed(ctx, name: str, *, content: str = None):
+    if name in embeds:
+        await ctx.send(f"An embed with the name `{name}` already exists. Use `/embed edit` to modify it.")
+        return
+
+    if not content:
+        content = f'This embed was created by {ctx.author.mention}'
+
+    embed_dict = {
+        "title": "",
+        "description": content,
+        "color": 0,
+        "fields": [],
+        "footer": "",
+        "image": "",
+        "thumbnail": ""
+    }
+    embeds[name] = embed_dict
+    save_embeds(embeds)
+    await ctx.send(f"Embed `{name}` has been created.")
+
+
+@has_required_perm()
+@embed.command(name='edit')
+async def edit_embed(ctx, name: str, field: str, *, value: str):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`. Use `/embed create` to create it first.")
+        return
+
+    if field not in ["title", "description", "footer"]:
+        await ctx.send("You can only edit `title`, `description`, or `footer` with this command.")
+        return
+
+    embeds[name][field] = value
+    save_embeds(embeds)
+    await ctx.send(f"Embed `{name}` has been updated: {field} set to `{value}`.")
+
+
+@has_required_perm()
+@embed.command(name='addfield')
+async def add_field(ctx, name: str, title: str, value: str, inline: bool = False):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    embeds[name]["fields"].append({"name": title, "value": value, "inline": inline})
+    save_embeds(embeds)
+    await ctx.send(f"Field added to embed `{name}`.")
+
+
+@has_required_perm()
+@embed.command(name='delfield')
+async def delete_field(ctx, name: str, index: int):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    try:
+        removed_field = embeds[name]["fields"].pop(index)
+        save_embeds(embeds)
+        await ctx.send(f"Field `{removed_field['name']}` has been removed from embed `{name}`.")
+    except IndexError:
+        await ctx.send("Invalid field index. Please check the embed and try again.")
+
+
+@has_required_perm()
+@embed.command(name='editfield')
+async def edit_field(ctx, name: str, index: int, title: str = None, value: str = None, inline: bool = None):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    try:
+        field = embeds[name]["fields"][index]
+        if title is not None:
+            field["name"] = title
+        if value is not None:
+            field["value"] = value
+        if inline is not None:
+            field["inline"] = inline
+
+        save_embeds(embeds)
+        await ctx.send(f"Field at index `{index}` in embed `{name}` has been updated.")
+    except IndexError:
+        await ctx.send("Invalid field index. Please check the embed and try again.")
+
+
+@has_required_perm()
+@embed.command(name='setcolor')
+async def set_color_embed(ctx, name: str, color: str):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    try:
+        if color.startswith("#"):
+            color = color[1:]
+        embeds[name]["color"] = int(color, 16)
+        save_embeds(embeds)
+        await ctx.send(f"Color updated for embed `{name}`.")
+    except ValueError:
+        await ctx.send("Invalid color code. Please provide a valid hexadecimal color (e.g., #3498db).")
+
+
+@has_required_perm()
+@embed.command(name='setimage')
+async def set_image_embed(ctx, name: str, image: str = ""):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    try:
+        if image in ['none', 'null']:
+            image = ""
+        embeds[name]["image"] = image
+        save_embeds(embeds)
+        await ctx.send(f"Image updated for embed `{name}`.")
+    except ValueError:
+        await ctx.send("Invalid color code. Please provide a valid hexadecimal color (e.g., #3498db).")
+
+
+@has_required_perm()
+@embed.command(name='setthumbnail')
+async def set_thumbnail_embed(ctx, name: str, thumbnail: str = ""):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    try:
+        if thumbnail in ['none', 'null']:
+            thumbnail = ""
+        embeds[name]["thumbnail"] = thumbnail
+        save_embeds(embeds)
+        await ctx.send(f"Thmbnail updated for embed `{name}`.")
+    except ValueError:
+        await ctx.send("Invalid color code. Please provide a valid hexadecimal color (e.g., #3498db).")
+
+
+@has_required_perm()
+@embed.command(name='delete')
+async def delete_embed(ctx, name: str):
+    if name not in embeds:
+        await ctx.send(f"No embed found with the name `{name}`.")
+        return
+
+    del embeds[name]
+    save_embeds(embeds)
+    await ctx.send(f"Embed `{name}` has been deleted.")
+
+
+@has_required_perm()
+@embed.command(name='send')
+async def send_embed(ctx, *,name: str):
+    embed = get_embed(name, ctx.author)
+    target_channel = ctx.channel
+    await target_channel.send(embed=embed)
+
+
+@has_required_perm()
+@embed.command(name='list')
+async def list_embeds(ctx):
+    try:
+        embed_list = ', '.join(embeds) if embeds else "No embeds available."
+
+        await ctx.send(f"Here are the available embeds:\n{embed_list}")
+    except Exception as e:
+        await ctx.send(f"An error occurred: {e}")
+
+
+@has_required_perm()
+@bot.command(name='setwelcomechannel')
+async def def_welcome_channel(ctx, channel: discord.TextChannel = None):
+    global server_configs
+    server_id = str(ctx.guild.id)
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+    server_configs[server_id]['welcome_channel_id'] = channel.id if channel else ctx.channel.id
+    save_server_configs(server_configs)
+    await ctx.channel.send('Welcome channel defined successfully')
+
+
+@has_required_perm()
+@bot.command(name='rmwelcomechannel')
+async def rm_welcome_channel(ctx):
+    server_id = str(ctx.guild.id)
+
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+
+    if 'welcome_channel_id' not in server_configs[server_id]:
+        await ctx.send('No welcome channel defined')
+        return
+    server_configs[server_id].pop('welcome_channel_id')
+    save_server_configs(server_configs)
+    await ctx.send('Welcome channel removed successfully')
+
+
+@has_required_perm()
+@bot.command(name='setwelcomeembed')
+async def def_welcome_embed(ctx, *, name:str = None):
+    server_id = str(ctx.guild.id)
+    if not name in embeds:
+        await ctx.send('No embed of that name exists')
+        return
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+
+    server_configs[str(ctx.guild.id)]['welcome_embed'] = name
+    save_server_configs(server_configs)
+
+    await ctx.channel.send('Welcome embed defined successfully')
+
+
+@has_required_perm()
+@bot.command(name='setleavechannel')
+async def def_leave_channel(ctx, channel: discord.TextChannel = None):
+    global server_configs
+    server_id = str(ctx.guild.id)
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+    server_configs[server_id]['leave_channel_id'] = channel.id if channel else ctx.channel.id
+    save_server_configs(server_configs)
+    await ctx.channel.send('Leave channel defined successfully')
+
+
+@has_required_perm()
+@bot.command(name='rmleavechannel')
+async def rm_leave_channel(ctx):
+    server_id = str(ctx.guild.id)
+
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+
+    if 'leave_channel_id' not in server_configs[server_id]:
+        await ctx.send('No Leave channel defined')
+        return
+    server_configs[server_id].pop('leave_channel_id')
+    save_server_configs(server_configs)
+    await ctx.send('Leave channel removed successfully')
+
+
+@has_required_perm()
+@bot.command(name='setleaveembed')
+async def def_leave_embed(ctx, *, name:str = None):
+    server_id = str(ctx.guild.id)
+    if not name in embeds:
+        await ctx.send('No embed of that name exists')
+        return
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+
+    server_configs[str(ctx.guild.id)]['leave_embed'] = name
+    save_server_configs(server_configs)
+
+    await ctx.channel.send('Leave embed defined successfully')
+
 
 
 ##Extra Stuff
@@ -2833,6 +3547,10 @@ For More Info Contact <@{owner.id}>.
         await ctx.send(help_msg)
 
 
+async def default_callback(interaction):
+    await interaction.respond(f'Pressed Button: {interaction.data["custom_id"]}')
+
+
 def check_for_updates():
     try:
         global current_version
@@ -2856,7 +3574,7 @@ def check_for_updates():
             devbuild = True
 
         if float(latest_release) > float(current_version_number):
-            outdated = True
+            outdated =   True
             state = "Outdated"
             logw(f'New version {latest_release} available!')
             logw(f'Download URL: {release.html_url}')
@@ -2905,11 +3623,15 @@ def update_code(server_url):
         print(f"Error updating script: {e}")
 
 
-def log_to_file(log_message, date_string):
-    os.makedirs('Logs', exist_ok=True)
-    log_file_path = os.path.join('Logs', f'{date_string}_log.txt')
+def log_to_file(message, date_string, log_dir):
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, 'log.txt')
     with open(log_file_path, 'a', encoding='utf-8') as file:
-        file.write(log_message + '\n')
+        file.write(message + '\n')
+
+
+def sanitize_filename(filename):
+    return re.sub(r'[<>:"/\\|?*]', '', filename)
 
 
 try:
@@ -2929,7 +3651,6 @@ async def check_message(message, keywords, caps):
     return len(matches) == len(keywords)
 
 
-# Function to process responses based on keywords
 async def process_responses(message, responses):
     for key, response_data in responses.items():
         keywords = response_data['keywords']
@@ -2948,11 +3669,95 @@ async def process_responses(message, responses):
 
 
 @bot.event
-async def on_message(message):
+async def on_voice_state_update(member: discord.Member, before, after):
+    global guild_vcs, personal_vcs
+    guild_id = str(member.guild.id)
 
+    if guild_id in guild_vcs:
+        if after.channel and str(after.channel.id) in guild_vcs[guild_id]:
+            join_to_create_id = str(after.channel.id)
+
+            if member.id in personal_vcs and personal_vcs[member.id].guild.id == int(guild_id):
+                await member.move_to(personal_vcs[member.id])
+                return
+
+            user_limit = guild_vcs[guild_id][join_to_create_id]["user_limit"]
+
+            overwrites = {
+                member.guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True),
+                member: discord.PermissionOverwrite(view_channel=True, connect=True)
+            }
+
+            category = after.channel.category
+            vc = await member.guild.create_voice_channel(f"{member.display_name}'s Room", overwrites=overwrites,
+                                                         category=category,
+                                                         user_limit=user_limit if user_limit > 0 else None)
+
+            await member.move_to(vc)
+
+            personal_vcs[member.id] = vc
+
+        if before.channel and before.channel.id in [vc.id for vc in personal_vcs.values()]:
+            if len(before.channel.members) == 0:
+                owner_id = [user_id for user_id, vc in personal_vcs.items() if vc.id == before.channel.id]
+                if owner_id:
+                    await before.channel.delete()
+                    del personal_vcs[owner_id[0]]
+
+        for join_to_create_id in list(guild_vcs[guild_id].keys()):
+            if not bot.get_channel(int(join_to_create_id)):
+                del guild_vcs[guild_id][join_to_create_id]
+                save_vc_data()
+
+    if config['log']:
+        now = datetime.now()
+        date_string = now.strftime('%Y-%m-%d')
+        time_string = now.strftime('%H-%M-%S')
+        log_dir = os.path.join('Logs', date_string, sanitize_filename(member.guild.name), 'Voice States')
+
+        if before.channel != after.channel:
+            if before.channel is None:
+                log_message = f'{member.guild.name} > {time_string} > {member.name} joined {after.channel.name}'
+            elif after.channel is None:
+                log_message = f'{member.guild.name} > {time_string} > {member.name} left {before.channel.name}'
+            else:
+                log_message = f'{member.guild.name} > {time_string} > {member.name} moved from {before.channel.name} to {after.channel.name}'
+            log_to_file(log_message, date_string, log_dir)
+
+
+@bot.event
+async def on_member_update(before, after):
+    if config['log']:
+        now = datetime.now()
+        date_string = now.strftime('%Y-%m-%d')
+        time_string = now.strftime('%H-%M-%S')
+        log_dir = os.path.join('Logs', date_string, sanitize_filename(after.guild.name), 'Member Updates')
+
+        if before.roles != after.roles:
+            removed_roles = [role for role in before.roles if role not in after.roles]
+            added_roles = [role for role in after.roles if role not in before.roles]
+
+            log_message = f'{after.guild.name} > {time_string} > {after.name} roles updated. '
+
+            if removed_roles:
+                log_message += f"Removed roles: {', '.join([role.name for role in removed_roles])}. "
+
+            if added_roles:
+                log_message += f"Added roles: {', '.join([role.name for role in added_roles])}. "
+
+            if not (added_roles or removed_roles):
+                log_message += "No changes in roles."
+
+            log_to_file(log_message, date_string, log_dir)
+
+        if before.name != after.name:
+            log_message = f'{after.guild.name} > {time_string} > Username updated. Before: {before.name}, After: {after.name}'
+            log_to_file(log_message, date_string, log_dir)
+
+
+@bot.event
+async def on_message(message: discord.Message):
     if not message.content.startswith(config['prefix']):
-        if message.author == bot.user:
-            return
         if message.author.id in user_language_settings:
             target_lang = user_language_settings[message.author.id]
             if target_lang != 'none':
@@ -3004,21 +3809,21 @@ async def on_message(message):
         )
 
     if message.mentions:
-        for mention in message.mentions:
-            if str(mention.id) in afk_users:
-                afk_message = afk_users[str(mention.id)]["message"]
-                afk_users[str(mention.id)]["mentions"].append({
-                    "author": str(message.author),
-                    "channel": str(message.channel)
-                })
-                with open(afk_file, 'w') as f:
-                    json.dump(afk_users, f, indent=4)
-                await message.channel.send(f"{mention.name} is AFK: {afk_message}")
+        if message.author.id != bot.user.id:
+            for mention in message.mentions:
+                if str(mention.id) in afk_users:
+                    afk_message = afk_users[str(mention.id)]["message"]
+                    afk_users[str(mention.id)]["mentions"].append({
+                        "author": str(message.author),
+                        "channel": f'[{str(message.channel)}]({message.jump_url})'
+                    })
+                    with open(afk_file, 'w') as f:
+                        json.dump(afk_users, f, indent=4)
+                    await message.channel.send(f"{mention.name} is AFK: {afk_message}")
 
     await process_responses(message, responses)
 
     if config['log']:
-
         now = datetime.now()
         date_string = now.strftime('%Y-%m-%d')
         time_string = now.strftime('%H-%M-%S')
@@ -3029,14 +3834,18 @@ async def on_message(message):
             msg = message.content
 
         if isinstance(message.channel, discord.DMChannel):
-            recipient_name = message.channel.recipient.name if message.channel.recipient else "Unknown"
-            log_message = f"[DM] {message.author} > {recipient_name} > {time_string}: {msg}"
+            author_name = sanitize_filename(message.author.name)
+            log_dir = os.path.join('Logs', date_string, 'DMs', author_name)
+            log_message = f"[DM] {message.author} > {time_string}: {msg}"
         else:
-            log_message = f'{message.guild.name} > #{message.channel.name} > {time_string} > {message.author.name}: {msg}'
+            server_name = sanitize_filename(message.guild.name)
+            channel_name = sanitize_filename(message.channel.name)
+            log_dir = os.path.join('Logs', date_string, server_name, channel_name)
+            log_message = f'{server_name} > #{channel_name} > {time_string} > {message.author.name}: {msg}'
 
-        os.makedirs('Logs', exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
+        log_file_path = os.path.join(log_dir, 'log.txt')
 
-        log_file_path = os.path.join('Logs', f'{date_string}_log.txt')
         with open(log_file_path, 'a', encoding='utf-8') as file:
             file.write(log_message + '\n')
 
@@ -3044,32 +3853,21 @@ async def on_message(message):
                 file_ext = attachment.filename.split('.')[-1].lower()
                 if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov', 'mp3', 'wav', 'zip', 'rar', 'ico',
                                 'txt']:
-                    file_name = f'{message.guild.name}_#{message.channel.name}_{time_string}_{message.author.name}_{attachment.filename}'
-                    file_path = os.path.join('Logs', file_name)
+                    attachment_dir = os.path.join(log_dir, 'attachments')
+                    os.makedirs(attachment_dir, exist_ok=True)
+                    file_name = f'{time_string}_{sanitize_filename(message.author.name)}_{sanitize_filename(attachment.filename)}'
+                    file_path = os.path.join(attachment_dir, file_name)
                     await attachment.save(file_path)
-                    file.write(
-                        f'{message.guild.name} > #{message.channel.name} > {time_string} > {message.author.name}: {attachment.filename} > {attachment.url}\n')
+                    file.write(f'{attachment.url} > {file_path}\n')
 
-            for attachment in message.embeds:
-                if attachment.type == 'video':
-                    file.write(
-                        f'#{message.channel.name} > {time_string} > {message.author.name}: {attachment.video.url}\n')
-                elif attachment.type == 'file':
-                    file_ext = attachment.filename.split('.')[-1].lower()
-                    if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov', 'mp3', 'wav', 'zip', 'rar',
-                                    'ico']:
-                        file_name = f'{message.guild.name}_#{message.channel.name}_{time_string}_{message.author.name}_{attachment.filename}'
-                        file_path = os.path.join('Logs', file_name)
-                        await attachment.save(file_path)
-                        file.write(
-                            f'{message.guild.name} > #{message.channel.name} > {time_string} > {message.author.name}: {attachment.filename} > {attachment.url}\n')
             for embed in message.embeds:
-                log_message += f"\nEmbed: {embed.title if embed.title else ''}"
-                log_message += f"\nDescription: {embed.description if embed.description else ''}"
+                embed_log_message = "\nEmbed:"
+                embed_log_message += f"\nTitle: {embed.title if embed.title else ''}"
+                embed_log_message += f"\nDescription: {embed.description if embed.description else ''}"
                 for field in embed.fields:
-                    log_message += f"\nField - Name: {field.name if field.name else ''}, Value: {field.value if field.value else ''}"
-                log_message += "\n"
-                file.write(log_message)
+                    embed_log_message += f"\nField - Name: {field.name if field.name else ''}, Value: {field.value if field.value else ''}"
+                embed_log_message += "\n"
+                file.write(embed_log_message)
 
             if message.attachments or message.embeds:
                 file.write('\n')
@@ -3077,66 +3875,188 @@ async def on_message(message):
     if config['plugins']:
         for filename in os.listdir(plugins_folder):
             if filename.startswith('on_message_') and filename.endswith('.ext'):
-                log(f'Loading on message extension {filename}')
-                filepath = os.path.join(plugins_folder, filename)
-                try:
-                    with open(filepath, 'r') as file:
-                        script = file.read()
+                if __name__ == '__main__':
+                    log(f'Loading on message extension {filename}')
+                    filepath = os.path.join(plugins_folder, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as file:
+                            script = file.read()
 
-                    exec(f"async def plugin_func(bot, message):\n{textwrap.indent(script, '    ')}")
-                    await locals()['plugin_func'](bot, message)
-                    log(f'Successfully executed: {filename}')
-                except Exception as e:
-                    logw(f'Failed to execute {filename}: {e}')
+                        exec(f"async def plugin_func(bot, message):\n{textwrap.indent(script, '    ')}")
+                        await locals()['plugin_func'](bot, message)
+                        log(f'Successfully executed: {filename}')
+                    except Exception as e:
+                        logw(f'Failed to execute {filename}: {e}')
 
     await bot.process_commands(message)
 
 
+async def example_call_back(interaction):
+    await interaction.respond(f'Hello! {interaction.user.mention}, this is an example button!')
+
+
+async def example_select_menu_callback(interaction: discord.Interaction):
+    selected_values = interaction.data['values']  # List of selected values
+    await interaction.response.send_message(f"You selected: {', '.join(selected_values)}")
+
+
+async def example_modal_callback(interaction: discord.Interaction, modal: ui.Modal):
+    input_1 = modal.children[0].value  # Value of the first TextInput
+    input_2 = modal.children[1].value  # Value of the second TextInput
+    await interaction.response.send_message(f"Received: Input 1 = {input_1}, Input 2 = {input_2}")
+
+
+eg_button = {
+    'label': 'example',
+    'style': discord.ButtonStyle.danger,
+    'custom_id': 'example',
+    'callback': example_call_back,
+    'emoji': '🥳'
+}
+button_configurations.append(eg_button)
+
+
+@bot.command()
+async def example_select_view(ctx: commands.Context):
+    options = [
+        SelectOption(label="Option 1", value="1"),
+        SelectOption(label="Option 2", value="2")
+    ]
+
+    view = create_select_view(placeholder="Choose an option", options=options, custom_id="select_menu_1",
+                              callback=example_select_menu_callback)
+    await ctx.send("Please choose an option:", view=view)
+
+
+@bot.command()
+async def example_modal(ctx: discord.ApplicationContext):
+    inputs = [
+        discord.ui.InputText(label="Input 1", placeholder="Enter something...", custom_id="input_1"),
+        discord.ui.InputText(label="Input 2", placeholder="Enter something else...", custom_id="input_2")
+    ]
+
+    modal = create_modal_view(title="Your Modal Title", inputs=inputs, custom_id="modal_1",
+                              callback=example_modal_callback)
+
+    await ctx.send_modal(modal)
+
+
+if __name__ == '__main__' and config['plugins']:
+    if not os.path.exists('plugins'):
+        os.mkdir('plugins')
+    plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
+    globals_dict = globals()
+    for plugin_file in plugin_files:
+        if plugin_file.endswith(".py"):
+            #log(f'Loading plugin: {plugin_file}')
+            plugin_path = os.path.join(plugins_folder, plugin_file)
+            with open(plugin_path, encoding='utf-8') as f:
+                try:
+                    code = compile(f.read(), plugin_path, 'exec')
+                    exec(code, globals_dict)
+                    log(f'Successfully loaded plugin: {plugin_file}')
+                except Exception as e:
+                    logerr(f'Error loading plugin: {plugin_file}\n{e}')
+
+
 @bot.event
-async def on_member_update(before, after):
-    if config['log']:
-        if before.roles != after.roles:
-            now = datetime.now()
-            date_string = now.strftime('%Y-%m-%d')
-            time_string = now.strftime('%H-%M-%S')
-            removed_roles = [role for role in before.roles if role not in after.roles]
-            added_roles = [role for role in after.roles if role not in before.roles]
+async def on_ready():
+    for button_config in button_configurations:
+        button_views[button_config['custom_id']] = create_button_view(
+            label=button_config['label'],
+            style=button_config['style'],
+            custom_id=button_config['custom_id'],
+            callback=button_config['callback'],
+            emoji=button_config['emoji'] if 'emoji' in button_config else None,
+            disabled=button_config['disabled'] if 'disabled' in button_config else False
 
-            log_message = f'{after.guild.name} > {time_string} > {after.name} roles updated. '
+        )
 
-            if removed_roles:
-                log_message += f"Removed roles: {', '.join([role.name for role in removed_roles])}. "
+        bot.add_view(button_views[button_config['custom_id']])
 
-            if added_roles:
-                log_message += f"Added roles: {', '.join([role.name for role in added_roles])}. "
+    if config['plugins']:
+        if not os.path.exists(plugins_folder):
+            os.makedirs(plugins_folder)
 
-            if not (added_roles or removed_roles):
-                log_message += "No changes in roles."
+        for filename in os.listdir(plugins_folder):
+            if filename.startswith('on_ready_') and filename.endswith('.ext'):
+                if __name__ == '__main__':
+                    log(f'Loading on ready extension {filename}')
+                    filepath = os.path.join(plugins_folder, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as file:
+                            script = file.read()
 
-            log_to_file(log_message, date_string)
+                        exec(script)
+                        log(f'Loaded: {filename}')
+                    except Exception as e:
+                        logw(f'Failed to load: {filename}: {e}')
 
-        if before.name != after.name:
-            now = datetime.now()
-            date_string = now.strftime('%Y-%m-%d')
-            time_string = now.strftime('%H-%M-%S')
-            log_message = f'{after.name} username updated. Before: {before.name}, After: {after.name}'
-            log_to_file(log_message, date_string)
+    global timers
+    timers = load_timers_state()
 
+    for timer_name in timers.keys():
+        await bot.loop.create_task(update_timer(timer_name))
 
-@bot.event
-async def on_voice_state_update(member, before, after):
-    if config['log']:
-        if before.channel != after.channel:
-            now = datetime.now()
-            date_string = now.strftime('%Y-%m-%d')
-            time_string = now.strftime('%H-%M-%S')
-            if before.channel is None:
-                log_message = f'{member.guild.name} > {time_string} > {member.name} joined {after.channel.name}'
-            elif after.channel is None:
-                log_message = f'{member.guild.name} > {time_string} > {member.name} left {before.channel.name}'
-            else:
-                log_message = f'{member.guild.name} > {time_string} > {member.name} moved from {before.channel.name} to {after.channel.name}'
-            log_to_file(log_message, date_string)
+    bot.add_view(CreateTicketView(bot))
+    bot.add_view(CloseTicketView(bot))
+    bot.add_view(DeleteTicketView(bot))
+    bot.add_view(CloseTicketRequestView(bot))
+
+    log(f'Logged in as {bot.user} (ID: {bot.user.id})')
+
+    if not bot.guilds:
+        client_id = bot.user.id
+        logw(
+            f'Bot not in any servers \nOAuth link: https://discord.com/oauth2/authorize?client_id={client_id}&permissions=8&scope=bot')
+
+    log('Starting Post Startup Setup')
+    for guild in bot.guilds:
+        bot_top_role = guild.get_member(bot.user.id).top_role
+        if not any(role.name == OWNER_PERMS_GROUP for role in guild.roles):
+            log(f'creating owner group in guild {guild}')
+            role = await guild.create_role(name=OWNER_PERMS_GROUP)
+            await role.edit(position=bot_top_role.position - 1)
+
+        if not any(role.name == MOD_PERMS_GROUP for role in guild.roles):
+            log(f'creating mod group in guild {guild}')
+            role = await guild.create_role(name=MOD_PERMS_GROUP)
+            await role.edit(position=bot_top_role.position - 2)
+
+        if not any(role.name == MEMBER_PERMS_GROUP for role in guild.roles):
+            log(f'creating member group in guild {guild}')
+            await guild.create_role(name=MEMBER_PERMS_GROUP)
+
+        if not any(role.name == "Muted" for role in guild.roles):
+            log(f"Creating 'Muted' role in guild {guild}")
+            permissions = discord.Permissions(send_messages=False, speak=False)
+            mute_role = await guild.create_role(name="Muted", permissions=permissions)
+            try:
+                if mute_role.position >= bot_top_role.position:
+                    raise discord.HTTPException(None, "Role hierarchy issue")
+                await mute_role.edit(position=bot_top_role.position - 3)
+            except discord.HTTPException as e:
+                logw(f"Failed to move 'Muted' role in {guild.name}: {e}")
+                log("Retrying hierarchy adjustment...")
+                bot_controlled_roles = [role for role in guild.roles if role.managed]
+                for role in bot_controlled_roles:
+                    if role.position >= bot_top_role.position:
+                        await role.edit(position=bot_top_role.position - 3)
+            for channel in guild.channels:
+                log(f"Setting 'Muted' permissions in guild {guild} channel {channel}")
+                try:
+                    await channel.set_permissions(mute_role, send_messages=False, speak=False)
+                except Exception as e:
+                    logw(e)
+
+    await bot.sync_commands()
+
+    log('Post Startup Finished!')
+
+    if config['member_count_id'] is not None:
+        channel = bot.get_channel(int(config['member_count_id']))
+        member_count = len(channel.guild.members)
+        await channel.edit(name=f'Members: {member_count}')
 
 
 def create_restart_script():
@@ -3152,7 +4072,7 @@ def restart_bot():
     os.execl(python, python, "{filename}")
 
 if __name__ == "__main__":
-    time.sleep(2)  # Give it some time before restarting
+    time.sleep(2)
     restart_bot()
 """
     with open("restart_script.py", "w") as f:
@@ -3160,18 +4080,16 @@ if __name__ == "__main__":
     log("Restart script created.")
 
 
-if config['plugins']:
-    if not os.path.exists('plugins'):
-        os.makedirs('plugins')
-    plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
-    globals_dict = globals()
-    for plugin_file in plugin_files:
-        if plugin_file.endswith(".py"):
-            log('Loading: ' + plugin_file)
-            plugin_path = os.path.join(plugins_folder, plugin_file)
-            with open(plugin_path) as f:
-                code = compile(f.read(), plugin_path, 'exec')
-                exec(code, globals_dict)
+def register_on_ready_extension(name, data):
+    if not os.path.isfile(f'{plugins_folder}/on_ready_{name}.ext'):
+        with open(f'{plugins_folder}/on_ready_{name}.ext', 'w') as f:
+            f.write(data)
+
+
+def register_on_message_extension(name, data):
+    if not os.path.isfile(f'{plugins_folder}/on_message_{name}.ext'):
+        with open(f'{plugins_folder}/on_message_{name}.ext', 'w') as f:
+            f.write(data)
 
 
 def retry_after_message(t):
@@ -3234,4 +4152,5 @@ def run_bot():
             break
 
 
-run_bot()
+if __name__ == '__main__':
+    run_bot()
