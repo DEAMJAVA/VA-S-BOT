@@ -1,4 +1,4 @@
-current_version = 'V12.0'
+current_version = 'V12.1'
 current_config_format = '17'
 plugins_folder = 'plugins'
 creator_id = '938059286054072371'
@@ -6,63 +6,51 @@ api = 'http://192.9.183.164:25041'
 TIMER_FILE = 'time.r'
 
 libraries = """
-aiohttp==3.9.3
-aiosignal==1.3.1
+aiohappyeyeballs==2.4.4
+aiohttp==3.11.11
+aiosignal==1.3.2
+anyio==4.8.0
 asyncio-dgram==2.2.0
-attrs==23.2.0
-blinker==1.7.0
-certifi==2024.2.2
-cffi==1.16.0
-chardet==3.0.4
-charset-normalizer==3.3.2
-click==8.1.7
-colorama==0.4.6
-cryptography==42.0.5
-Deprecated==1.2.14
+attrs==24.3.0
+certifi==2024.12.14
+cffi==1.17.1
+charset-normalizer==3.4.1
+cryptography==44.0.0
+Deprecated==1.2.15
 dnspython==2.7.0
-Flask==3.0.2
-frozenlist==1.4.1
-googletrans==4.0.0rc1
-h11==0.9.0
-h2==3.2.0
-hpack==3.0.0
-hstspreload==2024.8.1
-httpcore==0.9.1
-httpx==0.13.3
-hyperframe==5.2.0
-idna==2.10
-itsdangerous==2.1.2
-Jinja2==3.1.3
-MarkupSafe==2.1.5
+frozenlist==1.5.0
+googletrans==4.0.2
+h11==0.14.0
+h2==4.1.0
+hpack==4.0.0
+httpcore==1.0.7
+httpx==0.28.1
+hyperframe==6.0.1
+idna==3.10
 mcstatus==11.1.1
 mpmath==1.3.0
-multidict==6.0.5
-numpy==2.1.3
-pillow==11.0.0
-py-cord==2.6.0
+multidict==6.1.0
+pillow==11.1.0
+propcache==0.2.1
+py-cord==2.6.1
 pycparser==2.22
-PyGithub==2.3.0
-PyJWT==2.8.0
+PyGithub==2.5.0
+PyJWT==2.10.1
 PyNaCl==1.5.0
-pytz==2024.1
-qrcode==8.0
-requests==2.31.0
-rfc3986==1.5.0
-setuptools==75.6.0
+pytz==2024.2
+requests==2.32.3
+setuptools==75.7.0
 sniffio==1.3.1
-sympy==1.12
-typing_extensions==4.10.0
-urllib3==2.2.1
-Werkzeug==3.0.1
-wrapt==1.16.0
-yarl==1.9.4
-yt-dlp==2024.12.6
+sympy==1.13.3
+typing_extensions==4.12.2
+urllib3==2.3.0
+wrapt==1.17.0
+yarl==1.18.3
+yt-dlp==2024.12.23
 """
 
-# Imports
-import os
-
 try:
+    import os
     import subprocess
     import textwrap
     import pickle
@@ -95,25 +83,30 @@ try:
     from io import BytesIO
     from sympy import symbols, Eq, solve
     from difflib import get_close_matches
-except Exception as e:
-    print(e)
+
+except ModuleNotFoundError as e:
+    print(f"Library not found: {e.name}")
     with open('libraries.txt', 'w') as f:
         f.write(libraries)
-    os.system('pip install -r libraries.txt')
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'libraries.txt'])
+    exit()
+except ImportError as e:
+    print(f"Import error: {e}")
+    exit()
+except Exception as e:
+    print(f"An unexpected error occurred: {e}")
     exit()
 
 button_configurations = []
 
 button_views = {}
 
-#Startup
 log = logging.info
 logw = logging.warning
 logerr = logging.error
 logc = logging.critical
 loge = logging.exception
 
-# Create Config if not exist
 if not os.path.isfile('BotConfig.json'):
     log('No config file found creating BotConfig.json')
     INPUT_PREFIX = input('What do you want the bot prefix to be? \n')
@@ -127,7 +120,7 @@ if not os.path.isfile('BotConfig.json'):
         ENABLE_ECONOMY = True
         INPUT_WIN_PROB = int(input("Enter win probability for coinflip.\n")) / 100
         INPUT_INTEREST_RATE = int(input("Enter interest rate for loan.\n")) / 100
-        INPUT_DAILY_REWARD_RANGE = input("Enter daily reward range\n").split()
+        INPUT_DAILY_REWARD_RANGE = input("Enter daily reward range (answer example 100 - 200)\n").split(' - ')
         INPUT_DAILY_REWARD_RANGE_MIN = INPUT_DAILY_REWARD_RANGE[0]
         INPUT_DAILY_REWARD_RANGE_MAX = INPUT_DAILY_REWARD_RANGE[1]
     else:
@@ -164,7 +157,6 @@ if not os.path.isfile('BotConfig.json'):
     with open('BotConfig.json', 'w') as f:
         f.write(json.dumps(config, indent=4, ensure_ascii=False, separators=(',', ': ')) + '\n')
 
-# Load the config
 with open('BotConfig.json') as f:
     config = json.load(f)
 
@@ -210,13 +202,53 @@ def create_modal_view(title: str, inputs: list[InputText], custom_id: str, callb
     return CustomModal()
 
 
+def is_trusted(guild, user):
+    if server_configs.get(str(guild.id)):
+        if server_configs[str(guild.id)].get('antinuke_trustlist'):
+            if user.id in server_configs[str(guild.id)]['antinuke_trustlist']:
+                return True
+    if guild.owner_id == user.id or user.id == creator_id or user.id == bot.user.id:
+        return True
+    return False
+
+
+def is_whitelisted(guild, user):
+    if server_configs.get(str(guild.id)):
+        if server_configs[str(guild.id)].get('antinuke_whitelist'):
+            if user.id in server_configs[str(guild.id)]['antinuke_whitelist']:
+                return True
+    if is_trusted(guild, user):
+        return True
+    return False
+
+
+async def handle_member_kick(member, guild, user):
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        if not is_whitelisted(guild, user):
+            await user.ban()
+            if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                await channel.send(f"**ANTI NUKE TRIGGERD**: Member {member} was kicked by {user}.")
+
+async def handle_member_ban(member, guild, user):
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        if not is_whitelisted(guild, user):
+            await user.ban()
+            if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                await channel.send(f"**ANTI NUKE TRIGGERD**: Member {member} was banned by {user}.")
+
+
 runlog_dir = 'runlogs'
 os.makedirs(runlog_dir, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO,
                     format=f"[{config['bot_group_name']} | %(asctime)s | %(levelname)s]: %(message)s")
-logger = logging.getLogger()  # Get the root logger
-# Define the file handler to log to a file
+logger = logging.getLogger()
 file_handler = logging.FileHandler('botrunlog.txt')
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(logging.Formatter(f"[{config['bot_group_name']} | %(asctime)s | %(levelname)s]: %(message)s"))
@@ -259,15 +291,13 @@ SUPPORTED_LANGUAGES = {
     'yo': 'Yoruba', 'zu': 'Zulu'
 }
 
-# Extra Starting Stuff
 IsEconomy: any = config['enable_economy']
 
 
 def logcommand(message, command):
     if config['log']:
-        now = datetime.now()
-        date_string = now.strftime('%Y-%m-%d')
-        time_string = now.strftime('%H-%M-%S')
+        date_string = ttime().strftime('%Y-%m-%d')
+        time_string = ttime().strftime('%H-%M-%S')
         log_message = f'{message.guild.name} > #{message.channel.name} > {time_string} > {message.author.name} used the slash command: {command}'
 
         os.makedirs('Logs', exist_ok=True)
@@ -284,7 +314,7 @@ MEMBER_PERMS_GROUP = config['bot_group_name'] + '.' + 'member'
 
 class CreateTicketView(discord.ui.View):
     def __init__(self, bot):
-        super().__init__(timeout=None)  # Set timeout to None to keep the view persistent
+        super().__init__(timeout=None)
         self.bot = bot
 
     @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, emoji="🎟️",
@@ -295,7 +325,7 @@ class CreateTicketView(discord.ui.View):
 
 class CloseTicketView(discord.ui.View):
     def __init__(self, bot):
-        super().__init__(timeout=None)  # Set timeout to None to keep the view persistent
+        super().__init__(timeout=None)
         self.bot = bot
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒",
@@ -317,7 +347,7 @@ class CloseTicketRequestView(discord.ui.View):
 
 class DeleteTicketView(discord.ui.View):
     def __init__(self, bot):
-        super().__init__(timeout=None)  # Set timeout to None to keep the view persistent
+        super().__init__(timeout=None)
         self.bot = bot
 
     @discord.ui.button(label="Delete Ticket", style=discord.ButtonStyle.danger, emoji="🗑️",
@@ -352,7 +382,7 @@ def save_roles():
 
 
 def ttime():
-    timediff = float(config.get('timediff'))
+    timediff = float(config.get('timediff', 0))
     time = datetime.now().astimezone(timezone(timedelta(hours=+timediff)))
     return time
 
@@ -374,13 +404,14 @@ embeds = load_embeds()
 
 
 def replace_placeholders(content, user):
+    default_icon_url = "https://cdn.discordapp.com/embed/avatars/0.png"
     return content.replace("%user%", str(user)) \
         .replace("%username%", user.name) \
         .replace("%userid%", str(user.id)) \
         .replace("%usermention%", user.mention) \
-        .replace("%usericon%", user.avatar.url) \
+        .replace("%usericon%", user.avatar.url if user.avatar else default_icon_url) \
         .replace("%time%", ttime().strftime('%d-%m-%Y %I:%M:%S %p')) \
-        .replace("%servericon%", user.guild.icon.url) \
+        .replace("%servericon%", user.guild.icon.url if user.guild.icon else default_icon_url) \
         .replace("%servername%", str(user.guild.name))
 
 
@@ -437,9 +468,33 @@ server_configs = load_server_configs()
 
 @bot.event
 async def on_member_join(member):
+    if str(member.guild.id) in server_roles:
+        guild_id = str(member.guild.id)
+        for role_id in server_roles[guild_id]:
+            role_object: discord.Role = get(member.guild.roles, id=role_id)
+            if role_object:
+                await member.add_roles(role_object)
+            else:
+                server_roles[guild_id].remove(role_id)
+
+
+    server_config = server_configs.get(str(member.guild.id))
+    if server_config:
+        if server_config.get('member_count_channel'):
+            channel = bot.get_channel(int(server_config.get('member_count_channel')))
+            if not channel:
+                server_configs[str(member.guild.id)]['member_count_channel'] = None
+                save_server_configs(server_configs)
+            else:
+                member_count = len(channel.guild.members)
+                await channel.edit(name=f'Members: {member_count}')
+
+
     guild: discord.Guild = member.guild
     server_config: dict = server_configs.get(str(guild.id))
-    channel = bot.get_channel(int(server_config.get('welcome_channel_id')))
+    if not server_config:
+        return
+    channel = bot.get_channel(server_config.get('welcome_channel_id'))
     embed_name = server_config.get('welcome_embed')
     if not channel or not embed_name:
         return
@@ -449,9 +504,28 @@ async def on_member_join(member):
 
 @bot.event
 async def on_member_remove(member):
+    guild = member.guild
+    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
+        if entry.target == member:
+            await handle_member_kick(member, guild, entry.user)
+
+    server_config = server_configs.get(str(member.guild.id))
+    if server_config:
+        if server_config.get('member_count_channel'):
+            channel = bot.get_channel(int(server_config.get('member_count_channel')))
+            if not channel:
+                server_configs[str(member.guild.id)]['member_count_channel'] = None
+                save_server_configs(server_configs)
+            else:
+                member_count = len(channel.guild.members)
+                await channel.edit(name=f'Members: {member_count}')
+
+
     guild: discord.Guild = member.guild
     server_config: dict = server_configs.get(str(guild.id))
-    channel = bot.get_channel(int(server_config.get('leave_channel_id')))
+    if not server_config:
+        return
+    channel = bot.get_channel(server_config.get('leave_channel_id'))
     embed_name = server_config.get('leave_embed')
     if not channel or not embed_name:
         return
@@ -459,36 +533,154 @@ async def on_member_remove(member):
     await channel.send(embed=get_embed(embed_name, member))
 
 
+@bot.event
+async def on_member_ban(guild, member):
+    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+        if entry.target == member:
+            await handle_member_ban(member, guild, entry.user)
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    guild = channel.guild
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_create):
+            if not is_whitelisted(guild, entry.user):
+                await entry.user.ban()
+                if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                    channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                    await channel.send(f'**ANTI NUKE TRIGGERD**: Channel created: {channel.name} by {entry.user}')
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    guild = channel.guild
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+            if not is_whitelisted(guild, entry.user):
+                await entry.user.ban()
+                if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                    channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                    await channel.send(f'**ANTI NUKE TRIGGERD**: Channel deleted: {channel.name} by {entry.user}')
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    guild = before.guild
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_update):
+            if not is_whitelisted(guild, entry.user):
+                await entry.user.ban()
+                if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                    channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                    await channel.send(f'**ANTI NUKE TRIGGERD**: Channel updated: {before.name} -> {after.name} by {entry.user}')
+
+@bot.event
+async def on_guild_role_create(role):
+    guild = role.guild
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_create):
+            if not is_whitelisted(guild, entry.user):
+                await entry.user.ban()
+                if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                    channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                    await channel.send(f'**ANTI NUKE TRIGGERD**: Role created: {role.name} by {entry.user}')
+
+@bot.event
+async def on_guild_role_delete(role):
+    guild = role.guild
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
+        if not is_whitelisted(guild, entry.user):
+            await entry.user.ban()
+            if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                await channel.send(f'**ANTI NUKE TRIGGERD**: Role deleted: {role.name} by {entry.user}')
+
+@bot.event
+async def on_guild_role_update(before, after):
+    guild = before.guild
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_update):
+            if not is_whitelisted(guild, entry.user):
+                await entry.user.ban()
+                if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                    channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                    await channel.send(f'**ANTI NUKE TRIGGERD**: Role updated: {before.name} -> {after.name} by {entry.user}')
+
+
+@bot.event
+async def on_guild_update(before, after):
+    guild = after
+    if server_configs.get(str(guild.id)):
+        if not server_configs.get(str(guild.id)).get('antinuke'):
+            return
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.guild_update):
+            await entry.user.ban()
+            if server_configs.get(str(guild.id)).get('antinuke_logs_channel'):
+                channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
+                await channel.send(f'**ANTI NUKE TRIGGERD**: Guild settings updated by {entry.user}')
+
+
 def has_required_perm():
     async def predicate(ctx):
         if not ctx.guild:
-            return True
+            await ctx.send("Please use this command in a server!")
+            return False
         try:
-            owner_group = discord.utils.get(ctx.guild.roles, name=OWNER_PERMS_GROUP)
-            owner_id = config['owner_id']
-            mod_group = discord.utils.get(ctx.guild.roles, name=MOD_PERMS_GROUP)
-
-            if str(owner_id) != str(ctx.author.id) and str(creator_id) != str(
-                    ctx.author.id) and not mod_group in ctx.author.roles and not owner_group in ctx.author.roles:
-                await ctx.send("You don't have the required permission to execute this command!")
-                return False
+            guild = ctx.guild
+            guild_id = str(ctx.guild.id)
+            author_id = ctx.author.id
+            if not server_configs.get(guild_id):
+                server_configs[guild_id] = {'owners':[], 'authorized_users': []}
+                save_server_configs(server_configs)
+            if not server_configs[guild_id].get('owners'):
+                server_configs[guild_id]['owners'] = []
+                save_server_configs(server_configs)
+            if not server_configs[guild_id].get('authorized_users'):
+                server_configs[guild_id]['authorized_users'] = []
+                save_server_configs(server_configs)
+            if author_id == guild.owner_id or author_id in server_configs[guild_id]['owners'] or author_id in server_configs[guild_id]['authorized_users']:
+                return True
         except Exception as e:
             await ctx.send(f'An error occurred: {e}')
-        return True
+        await ctx.send(f'You dont have access to use this command!')
+        return False
 
     return commands.check(predicate)
 
 
 def has_owner_perm():
     async def predicate(ctx):
-        owner_group = discord.utils.get(ctx.guild.roles, name=OWNER_PERMS_GROUP)
-        owner_id = config['owner_id']
-
-        if str(owner_id) != str(ctx.author.id) and str(creator_id) != str(
-                ctx.author.id) and not owner_group in ctx.author.roles:
-            await ctx.send("You don't have the required permission to execute this command!")
+        if not ctx.guild:
+            await ctx.send("Please use this command in a server!")
             return False
-        return True
+        try:
+            guild = ctx.guild
+            guild_id = str(ctx.guild.id)
+            author_id = ctx.author.id
+            if not server_configs.get(guild_id):
+                server_configs[guild_id] = {'owners': [], 'authorized_users': []}
+                save_server_configs(server_configs)
+            if not server_configs[guild_id].get('owners'):
+                server_configs[guild_id]['owners'] = []
+                save_server_configs(server_configs)
+            if author_id == guild.owner_id or author_id in server_configs[guild_id]['owners']:
+                return True
+        except Exception as e:
+            await ctx.send(f'An error occurred: {e}')
+        await ctx.send(f'You dont have access to use this command!')
+        return False
 
     return commands.check(predicate)
 
@@ -498,14 +690,21 @@ def is_owner():
         owner_id = config['owner_id']
 
         if str(owner_id) != str(ctx.author.id) and str(creator_id) != str(ctx.author.id):
-            await ctx.send("You don't have the required permission to execute this command!")
+            await ctx.send(f'You dont have access to use this command!')
             return False
         return True
 
     return commands.check(predicate)
 
 
-##Commands
+helps = {}
+bot_prefix = config['prefix']
+def add_help(category, name, description):
+    if not helps.get(category):
+        helps[category] = {}
+    helps[category][name] = description
+
+
 @bot.command(name='kick')
 @has_required_perm()
 async def kick(ctx, member: discord.Member):
@@ -514,6 +713,7 @@ async def kick(ctx, member: discord.Member):
         await ctx.send(f"{member.name} has been kicked!")
     except Exception as e:
         await ctx.send(f'An error occured: {e}')
+add_help('Moderation', 'kick <member>', 'kicks a member from the server')
 
 
 @bot.command(name='ban')
@@ -524,35 +724,50 @@ async def ban(ctx, member: discord.Member):
         await ctx.send(f'{member} has been banned from the server.')
     except Exception as e:
         await ctx.send(f'An error occured: {e}')
+add_help('Moderation', 'ban <member>', 'bans a member from the server')
 
 
 @bot.command(name='unban')
 @has_required_perm()
 async def unban(ctx, *, name):
     try:
+        mention_match = re.match(r"<@!?(\d+)>", name)
+        user_id = None
+        if mention_match:
+            user_id = int(mention_match.group(1))
         async for ban_entry in ctx.guild.bans():
             user = ban_entry.user
-            if user.name.lower() == name.lower():
+            if user_id and user.id == user_id:
                 await ctx.guild.unban(user)
                 await ctx.send(f'{user.mention} has been unbanned from the server.')
                 return
-        await ctx.send(f'Could not find banned user: {name}')
+            elif name.lower() in [f"{user.name}#{user.discriminator}".lower(), user.name.lower()]:
+                await ctx.guild.unban(user)
+                await ctx.send(f'{user.mention} has been unbanned from the server.')
+                return
+        await ctx.send(f'Could not find a banned user with the name: {name}')
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to unban members.")
+    except discord.HTTPException as e:
+        await ctx.send(f"An error occurred while unbanning: {e}")
     except Exception as e:
-        await ctx.send(f'An error occurred: {e}')
+        await ctx.send(f"An unexpected error occurred: {e}")
+add_help('Moderation', 'unban <member>', 'unbans a member from the server')
 
 
 @bot.command(name='mute')
 @has_required_perm()
-async def mute(ctx, member: discord.Member, *, reason=None):
+async def mute(ctx, member: discord.Member):
     guild = ctx.guild
     try:
         mute_role = discord.utils.get(guild.roles, name="Muted")
         if not mute_role:
-            await ctx.send('muterole not setup yet, use the setupmute command frist')
-        await member.add_roles(mute_role, reason=reason)
+            await ctx.send('mute role not setup yet, use the setupmute command first')
+        await member.add_roles(mute_role)
         await ctx.send(f"{member.mention} has been muted.")
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+add_help('Moderation', 'mute <member>', 'mutes a member in the server')
 
 
 @bot.command(name='unmute')
@@ -565,48 +780,19 @@ async def unmute(ctx, member: discord.Member, *, reason=None):
         await ctx.send(f"{member.mention} has been unmuted.")
     except Exception as e:
         await ctx.send(f'An error occured: {e}')
+add_help('Moderation', 'unmute <member>', 'unmutes a member in the server')
 
 
 @bot.command(name='shutdown')
-@has_owner_perm()
+@is_owner()
 async def shutdown(ctx):
-    try:
-        await ctx.send('Shutting down...')
-        await save_state_and_exit()
-    except:
-        save_timers_state()
-
-
-@bot.slash_command(description="Shutdowns the bot")
-@has_owner_perm()
-async def shutdown(ctx):
-    try:
-        await ctx.respond('Shutting down...')
-        save_timers_state()
-    except:
-        save_timers_state()
-    logcommand(message=ctx, command="Shutdown")
-
-
-@has_owner_perm()
-@bot.command(name='restart', aliases=['reload'])
-async def restart(ctx):
-    await ctx.send("Restarting...")
-    logw("Restarting bot")
-    await restart_bot()
-
-
-@bot.slash_command(description="Restarts the bot")
-@has_owner_perm()
-async def restart(ctx):
-    logcommand(message=ctx, command="restart")
-    await ctx.respond("Restarting...")
-    log("Restarting")
-    await restart_bot()
+    await ctx.send('Shutting down...')
+    await save_state_and_exit()
+add_help('Owner', 'shutdown', 'shuts down the bot')
 
 
 @bot.command(name='status')
-@has_owner_perm()
+@is_owner()
 async def status(ctx, arg: str):
     try:
         if arg == 'online':
@@ -624,38 +810,55 @@ async def status(ctx, arg: str):
         else:
             await ctx.send("Invalid status provided. Please choose from 'online', 'invisible', 'idle', or 'dnd'.")
     except Exception as e:
-        await ctx.send(f'An error occured: {e}')
+        await ctx.send(f'An error occurred: {e}')
+add_help('Owner', 'status <status>', 'changes bot status between online, invisible, idle and dnd')
 
 
 @bot.command(name='setcstatus', aliases=['setstatus', 'customstatus', 'scs'])
-@has_owner_perm()
-async def setcstatus(ctx, status_type: str, *, status_text: str):
+@is_owner()
+async def setcstatus(ctx, status_type: str, *, status_text: str = ""):
     try:
-        if status_type.lower() == "playing":
+        status_type = status_type.lower()
+        status_text = status_text.strip()
+
+        current_presence = bot.status
+        activity = None
+
+        if status_type == "playing":
             activity = discord.Game(name=status_text)
-        elif status_type.lower() == "listening":
+        elif status_type == "listening":
             activity = discord.Activity(type=discord.ActivityType.listening, name=status_text)
-        elif status_type.lower() == "watching":
+        elif status_type == "watching":
             activity = discord.Activity(type=discord.ActivityType.watching, name=status_text)
+        elif status_type == "streaming":
+            activity = discord.Streaming(name=status_text, url="https://www.twitch.tv/Streaming")
+        elif status_type == "competing":
+            activity = discord.Activity(type=discord.ActivityType.competing, name=status_text)
         else:
             await ctx.send(
-                "Invalid status type. Valid options are `playing`, `listening`, `watching`, and `streaming`.")
+                "Invalid status type. Valid options are `playing`, `listening`, `watching`, `streaming`, `competing`,")
             return
 
-        await bot.change_presence(activity=activity)
-        await ctx.send(f"Status set to: {status_type.title()} {status_text}")
+        await bot.change_presence(activity=activity, status=current_presence)
+        status_message = f"Status set to: `{status_type.title()}`"
+        if status_text:
+            status_message += f" `{status_text}`"
+        await ctx.send(status_message)
+
     except Exception as e:
-        await ctx.send(f'An error occured: {e}')
+        await ctx.send(f"An error occurred: {e}")
+add_help('Owner', 'setstatus <playing/listening/watching/streaming/competing> <text>', 'sets custom activity')
 
 
 @bot.command(name='clearstatus')
-@has_owner_perm()
+@is_owner()
 async def clearstatus(ctx):
     try:
         await bot.change_presence(activity=None)
         await ctx.send("Status cleared.")
     except Exception as e:
         await ctx.send('An error occured: {e}')
+add_help('Owner', 'clearstatus', 'Clears bot activity')
 
 
 @bot.command(name='setnickname')
@@ -666,6 +869,7 @@ async def setnickname(ctx, member: discord.Member, *, new_nickname: str):
         await ctx.send(f"Nickname has been changed to {new_nickname}.")
     except Exception as e:
         await ctx.send(f'An error occured: {e}')
+add_help('Moderation', 'setnickname <member> <name>', 'changes nickname of a member')
 
 
 @bot.command(name='nickname')
@@ -676,10 +880,11 @@ async def nickname(ctx, *, new_name: str):
         await ctx.send(f"My nickname has been changed to {new_name}")
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+add_help('Moderation', 'nickname <name>', 'changes nickname of the bot')
 
 
 @bot.command(name='random')
-async def random(ctx, mi=None, ma=None):
+async def random(ctx, mi=0, ma=10000):
     try:
         prefix = config['prefix']
         if mi == None or ma == None or int(mi) >= int(ma) or not isinstance(
@@ -690,6 +895,7 @@ async def random(ctx, mi=None, ma=None):
         await ctx.send(f'Your random number is: {output}')
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+add_help('General', 'random [minimum] [maximum]', 'Gives out a random number between the maximum and minimum number. if no values are provided it will generate a random number between 0 and 1000')
 
 
 @bot.slash_command(name='random',
@@ -716,6 +922,7 @@ async def addrole(ctx, member: discord.Member, role: discord.Role):
             f"{member.display_name} has been given the {role.name} role.")
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+add_help('Moderation', 'addrole <member> <role>', 'gives a role to a member')
 
 
 @bot.command(name='removerole')
@@ -726,9 +933,10 @@ async def removerole(ctx, member: discord.Member, role: discord.Role):
         await ctx.send(f"{member.display_name} has had the {role.name} role removed.")
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+add_help('Moderation', 'removerole <member> <role>', 'removes a role from the member')
 
 
-@bot.command(name='createrole')
+@bot.command(name='createrole', aliases=['makerole'])
 @has_required_perm()
 async def createrole(ctx, role_name):
     try:
@@ -740,33 +948,49 @@ async def createrole(ctx, role_name):
         await ctx.send(f"Role {role_name} has been created.")
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
+add_help('Moderation', 'createrole <name>', 'creates a role')
 
 
-@bot.command(name='deleterole')
+@bot.command(name='deleterole', aliases=['roledelete'])
 @has_required_perm()
-async def deleterole(ctx, role: discord.Role):
+async def deleterole(ctx, *, role_input: str = None):
     try:
+        if role_input is None:
+            return await ctx.send("Please specify a role to delete or use 'all' to delete all roles.")
+
+        if role_input.lower() == "all":
+            if not ctx.author.guild_permissions.administrator:
+                return await ctx.send("You need administrator permissions to delete all roles.")
+
+            deletable_roles = [r for r in ctx.guild.roles if r != ctx.guild.default_role]
+            if not deletable_roles:
+                return await ctx.send("No roles available to delete.")
+
+            for role in deletable_roles:
+                await role.delete()
+            return await ctx.send("All deletable roles have been deleted.")
+
+        if len(ctx.message.role_mentions) > 0:
+            role = ctx.message.role_mentions[0]
+        else:
+            roles = [r for r in ctx.guild.roles if r.name == role_input]
+            if len(roles) == 0:
+                return await ctx.send(f"No roles found with the name '{role_input}'.")
+            if len(roles) > 1:
+                return await ctx.send(
+                    f"Multiple roles found with the name '{role_input}'. Please mention the role to delete."
+                )
+            role = roles[0]
+
+        if role >= ctx.guild.me.top_role:
+            return await ctx.send(
+                f"I cannot delete the role `{role.name}` as it is higher than or equal to my top role.")
+
         await role.delete()
-        await ctx.send(f"Role {role.name} has been deleted.")
+        await ctx.send(f"Role `{role.name}` has been deleted.")
     except Exception as e:
         await ctx.send(f"An error occurred: {e}")
-
-
-@bot.command(name='changerolecolour')
-@has_required_perm()
-async def changerolecolor(ctx, role: discord.Role, hex_color: str):
-    try:
-        color = discord.Colour(
-            int(hex_color.strip("#"),
-                16))
-        await role.edit(colour=color)
-        await ctx.send(f"Color of role {role.name} has been changed.")
-    except ValueError:
-        await ctx.send(
-            "Invalid color format. Please enter a valid hex color code (e.g. #FF0000)."
-        )
-    except Exception as e:
-        await ctx.send(f"An error occurred: {e}")
+add_help('Moderation', 'deleterole <role>', 'deletes a role from the server')
 
 
 if IsEconomy:
@@ -1165,7 +1389,7 @@ if IsEconomy:
                 await ctx.send(
                     f"Congratulations {ctx.author.mention}, you claimed your daily reward of {reward} coins!")
             else:
-                remaining_time = datetime.fromtimestamp(last_claim_times[user_id] + 86400) - datetime.now()
+                remaining_time = datetime.fromtimestamp(last_claim_times[user_id] + 86400) - ttime()
                 hours, remainder = divmod(remaining_time.seconds, 3600)
                 minutes, seconds = divmod(remainder, 60)
                 await ctx.send(
@@ -1316,6 +1540,7 @@ async def clear(ctx, target=None, amount: int = None):
     response = f'Cleared {len(deleted)} messages. ' + ('By ' if target else None) + target if target else None
 
     await ctx.send(response)
+add_help('Moderation', 'clear [target] [amount]', 'clears the chat. in a limited amount if provided. clears messages by spesific user if target is provided')
 
 
 @bot.command(name='clears', aliases=['nukes'])
@@ -1362,18 +1587,21 @@ async def clear(ctx: discord.context, target=None, amount: int = None):
         deleted = await ctx.channel.purge(limit=amount, check=check_message_pin)
 
     log(f'Silent Deleted {len(deleted)} messages from guild {ctx.guild.name} | Target: {target if target else "All"} | By {ctx.author.name}')
+add_help('Moderation', 'clears [target] [amount]', 'basically clear but does not send message after its done')
 
 
-@bot.command(name='update', aliases=['ver', 'version'])
-async def update(ctx):
+@bot.command(name='version', aliases=['ver'])
+async def version(ctx):
     response = check_for_updates()
     await ctx.send(response)
+add_help('General', 'version', 'Tells you the version of the bot and if its outdated')
 
 
 @bot.command(name='ping')
 async def ping(ctx):
     latency = bot.latency
     await ctx.send(f'Pong! Latency: {latency * 1000:.2f}ms')
+add_help('General', 'ping', 'checks bot latency')
 
 
 @bot.command()
@@ -1389,6 +1617,7 @@ async def lock(ctx, *, role: discord.Role):
     await channel.set_permissions(role, overwrite=overwrite)
 
     await ctx.send(f"{channel.mention} has been locked for {role.mention}.")
+add_help('Moderation', 'lock <role>', 'locks the channel for the given role')
 
 
 @bot.command()
@@ -1404,6 +1633,7 @@ async def unlock(ctx, *, role: discord.Role):
     await channel.set_permissions(role, overwrite=overwrite)
 
     await ctx.send(f"{channel.mention} has been unlocked for {role.mention}.")
+add_help('Moderation', 'unlock <role>', 'unlocks the channel for the given role')
 
 
 @bot.command()
@@ -1419,10 +1649,11 @@ async def getpfp(ctx, *, user: discord.User = None):
     except discord.Forbidden:
         await ctx.send(
             "I couldn't send you the picture. Please make sure you have DMs enabled from this server's members.")
+add_help('General', 'getpfp [user]', 'dms you your pfp link or the pfp link of the user provided')
 
 
 @bot.command(name="reloadresponses", aliases=['reloadresponse', 'responsesreload', 'responsereload'])
-@has_required_perm()
+@is_owner()
 async def reloadresponses(ctx):
     try:
         with open("responses.json", "r") as f:
@@ -1433,6 +1664,7 @@ async def reloadresponses(ctx):
         with open("responses.json", "w") as f:
             json.dump(responses, f)
     await ctx.send("Responses has been reloaded!")
+add_help('Owner', 'reloadresponses', 'reloads the auto resposes config')
 
 
 @bot.command()
@@ -1450,40 +1682,7 @@ async def poll(ctx):
     else:
         await response.add_reaction("👍")
         await response.add_reaction("👎")
-
-
-@bot.command()
-@has_required_perm()
-async def giveaway(ctx, duration: int, *, prize: str):
-    author_mention = ctx.author.mention
-
-    embed = discord.Embed(
-        title="🎉 Giveaway 🎉",
-        description=f"{author_mention} is hosting a giveaway for {prize}.\nGiveaway ends in {duration} minutes.",
-        color=0x00ff00
-    )
-    embed.set_footer(text="React with 🎉 to participate!")
-
-    message = await ctx.send(embed=embed)
-
-    await message.add_reaction("🎉")
-
-    await asyncio.sleep(duration * 60)
-
-    new_message = await ctx.fetch_message(message.id)
-
-    reactions = new_message.reactions
-
-    for reaction in reactions:
-        if reaction.emoji == "🎉":
-            users = await reaction.users().flatten()
-            users.remove(bot.user)
-            if len(users) > 0:
-                winner = rand.choice(users)
-                await ctx.send(
-                    f"🥳 Congratulations, {winner.mention}! You won the {prize} giveaway hosted by {author_mention}!")
-            else:
-                await ctx.send("No one participated in the giveaway. Better luck next time!")
+add_help('General', 'poll', 'adds reaction to the next message you send within the next 20 seconds creating a upvote and downvote')
 
 
 @bot.slash_command(name="giveaway",
@@ -1618,11 +1817,9 @@ async def spin(ctx):
         names = file.readlines()
 
     if names:
-        # Remove newline characters and the last selected user from the list
         names = [name.strip() for name in names if name.strip() != last_selected_user]
 
         if not names:
-            # If there are no other options, reset to allow selection of the same user
             names = [last_selected_user]
 
         selected_name = rand.choice(names)
@@ -1730,26 +1927,7 @@ async def user_info(ctx, user: str = None):
     embed.add_field(name='Server Join Date', value=joined_info, inline=False)
 
     await ctx.send(embed=embed)
-
-
-@bot.slash_command(description="clear a chat")
-@has_required_perm()
-async def clear(ctx, amount=None, args=str):
-    def check_message(msg):
-        return not msg.pinned
-
-    if amount is None:
-        amount = 9999999999999999999999999999999999999999999999999
-    else:
-        amount = int(amount)
-
-    deleted = await ctx.channel.purge(limit=amount + 1, check=check_message)
-
-    if args is None:
-        await ctx.respond(f'Cleared {len(deleted) - 1} messages.')
-    else:
-        await ctx.respond(f'Cleared {len(deleted) - 1} messages.', ephemeral=True)
-    logcommand(message=ctx, command="clear")
+add_help('General', 'userinfo <member>', 'gives information about the user')
 
 
 @bot.command(name="suggest", aliases=["suggestion"])
@@ -1775,12 +1953,13 @@ async def suggest(ctx, *, suggestion_text: str = None):
 
 @bot.slash_command(name='time', description='Tells you the current date and time')
 async def whatisthetime(ctx):
-    now = datetime.now()
+    now = ttime()
     y, m, d = now.year, now.month, now.day
     month_name = calendar.month_name[m]
     current_time = now.strftime("%I:%M:%S:%f:%p")[:-3]
     await ctx.respond(f'{month_name} {y} \nCurrent date: {d} \nCurrent time: {current_time}')
     logcommand(message=ctx, command="Time")
+add_help('General', 'time', 'tells you the bots local time')
 
 
 @bot.command(name='giveallrole', aliases=['roleall'])
@@ -1802,6 +1981,7 @@ async def giveall(ctx, *, role: discord.Role = None):
                 await ctx.send(f"An error occurred: {e}")
 
     await ctx.send(f'Role {role.mention} has been added to all members')
+add_help('Moderation', 'roleall <role>', 'gives all server members a role')
 
 
 @bot.command(name='removeall')
@@ -1821,6 +2001,7 @@ async def removeall(ctx, *, role: discord.Role = None):
             await ctx.send(f"An error occurred: {e}")
 
     await ctx.send(f'Role {role.mention} has been removed from all members')
+add_help('Moderation', 'removeall <role>', 'remove removes a role from all server members')
 
 
 @bot.command(name='mc', aliases=['membercount'])
@@ -1828,8 +2009,18 @@ async def mc(ctx):
     member_count = len(ctx.guild.members)
     if int(member_count) == 1:
         await ctx.send(f'This server has only {member_count} member.')
-        return
-    await ctx.send(f'This server has a total of {member_count} members.')
+    else:
+        await ctx.send(f'This server has a total of {member_count} members.')
+    server_config = server_configs.get(str(ctx.guild.id))
+    if server_config:
+        if server_config.get('member_count_channel'):
+            channel = bot.get_channel(int(server_config.get('member_count_channel')))
+            if not channel:
+                server_configs[str(ctx.guild.id)]['member_count_channel'] = None
+                save_server_configs(server_configs)
+            else:
+                await channel.edit(name=f'Members: {member_count}')
+add_help('General', 'mc', 'tells you the membercount of the server')
 
 
 @bot.slash_command(name='math', description='Performs basic arithmetic operations',
@@ -1869,6 +2060,7 @@ async def solve_equation(ctx, *, equation: str):
 async def execu(ctx, *, val: str = None):
     await ctx.message.delete()
     exec(val)
+add_help('Owner', 'exec <code>', 'executes some code')
 
 
 @is_owner()
@@ -1876,23 +2068,18 @@ async def execu(ctx, *, val: str = None):
 async def execcmd(ctx, *, val: str = None):
     await ctx.message.delete()
     os.system(val)
+add_help('Owner', 'cmd <command>', 'executes a shell command in the system')
 
 
 @is_owner()
-@bot.command(name='crf')
+@bot.command(name='createfile', aliases=['crf'])
 async def createfile(ctx):
     if len(ctx.message.attachments) > 0:
         attachment = ctx.message.attachments[0]
         await attachment.save(attachment.filename)
 
     await ctx.message.delete()
-
-
-@is_owner()
-@bot.command(name="eval")
-async def evalu(ctx, *, val: str = None):
-    await ctx.message.delete()
-    eval(val)
+add_help('Owner', 'createfile <attachment>', 'uploades the provided attachment to the bots directory')
 
 
 @is_owner()
@@ -1906,17 +2093,20 @@ async def inviteall(ctx):
             await ctx.author.send(f"Invite link for {guild.name}: {invite}")
     else:
         await ctx.message.delete()
+add_help('Owner', 'inviteall', 'invites you to all the servers the bot is in')
 
 
-@bot.command(name="getsico")
+@bot.command(name="getsservericon", aliases=['getsico'])
 async def get_server_icon(ctx):
     guild = ctx.guild
     icon_url = guild.icon.url
     await ctx.send(icon_url)
+add_help('General', 'getsico', 'gives you the link of the server icon')
 
 
 @bot.command(name='dm')
-async def direct_message(ctx, user: discord.User, *, content: str = ''):
+@is_owner()
+async def direct_message(ctx, user: discord.User, *, content: str = 'Hello!'):
     try:
         if ctx.message.attachments:
             for attachment in ctx.message.attachments:
@@ -1926,6 +2116,7 @@ async def direct_message(ctx, user: discord.User, *, content: str = ''):
         await ctx.send(f"Sent a direct message to {user.name}")
     except discord.Forbidden:
         await ctx.send("Unable to send a direct message. Make sure the user has DMs enabled.")
+add_help('Owner', 'dm <user> <message>', 'Dms a user the provided message')
 
 
 async def get_average_color(image_url):
@@ -1934,8 +2125,7 @@ async def get_average_color(image_url):
             if response.status == 200:
                 img_data = await response.read()
                 image = Image.open(BytesIO(img_data))
-                # Resize to speed up processing
-                image = image.resize((50, 50))  # Resize to 50x50 for faster computation
+                image = image.resize((50, 50))
                 pixels = list(image.getdata())
                 avg_color = tuple(sum(c) // len(c) for c in zip(*pixels))
                 return avg_color
@@ -1955,9 +2145,10 @@ async def si(ctx):
     verification_level = server_info.verification_level
     stickers = len(server_info.stickers)
     emojis = len(server_info.emojis)
+    animated_emojis = len([emoji for emoji in server_info.emojis if emoji.animated])
+    static_emojis = emojis - animated_emojis
     boost_count = server_info.premium_subscription_count or 0
     boost_tier = server_info.premium_tier
-
     role_count = len(server_info.roles)
 
     creation_date = server_info.created_at
@@ -1986,7 +2177,8 @@ async def si(ctx):
     embed.add_field(name='Role Count', value=f'{role_count}', inline=True)
     embed.add_field(name='Verification Level', value=f'{verification_level}', inline=True)
     embed.add_field(name='Stickers', value=f'{stickers}/{server_info.sticker_limit}', inline=True)
-    embed.add_field(name='Emojis ', value=f'{emojis}/{server_info.emoji_limit}', inline=True)
+    embed.add_field(name='Static Emojis', value=f'{static_emojis}/{server_info.emoji_limit}', inline=True)
+    embed.add_field(name='Animated Emojis', value=f'{animated_emojis}/{server_info.emoji_limit}', inline=True)
     embed.add_field(name='Boost Level', value=f'{boost_tier}', inline=True)
     embed.add_field(name='Boost Count', value=f'{boost_count}', inline=True)
     embed.set_footer(
@@ -1995,6 +2187,7 @@ async def si(ctx):
         embed.set_thumbnail(url=server_icon)
 
     await ctx.send(embed=embed)
+add_help('General', 'si', 'gives you server information')
 
 
 @is_owner()
@@ -2003,25 +2196,11 @@ async def postjoinsetup(ctx):
     guild = ctx.guild
     bot_top_role = guild.get_member(bot.user.id).top_role
     await ctx.send('Starting Setup!')
-    if not any(role.name == OWNER_PERMS_GROUP for role in guild.roles):
-        await ctx.send(f'creating owner group')
-        role = await guild.create_role(name=OWNER_PERMS_GROUP)
-        await role.edit(position=bot_top_role.position - 1)
-
-    if not any(role.name == MOD_PERMS_GROUP for role in guild.roles):
-        await ctx.send('creating mod group')
-        role = await guild.create_role(name=MOD_PERMS_GROUP)
-        await role.edit(position=bot_top_role.position - 2)
-
-    if not any(role.name == MEMBER_PERMS_GROUP for role in guild.roles):
-        await ctx.send('creating member group')
-        await guild.create_role(name=MEMBER_PERMS_GROUP)
-
     if not any(role.name == "Muted" for role in guild.roles):
         await ctx.send('creating muted role')
         permissions = discord.Permissions(send_messages=False, speak=False)
         mute_role = await guild.create_role(name="Muted", permissions=permissions)
-        await mute_role.edit(position=bot_top_role.position - 3)
+        await mute_role.edit(position=bot_top_role.position - 1)
         for channel in guild.channels:
             await ctx.send(f'setting up muted permissions for channel {channel}')
             try:
@@ -2029,10 +2208,11 @@ async def postjoinsetup(ctx):
             except Exception as e:
                 logw(e)
     await ctx.send('Setup DONE!')
+add_help('Moderation', 'mute <member>', 'mutes a member in the server')
 
 
 @bot.command()
-@is_owner()
+@has_required_perm()
 async def setupmute(ctx):
     mute_role = None
     guild = ctx.guild
@@ -2052,6 +2232,7 @@ async def setupmute(ctx):
             await channel.set_permissions(mute_role, send_messages=False, speak=False)
         except Exception as e:
             logw(e)
+add_help('Moderation', 'setupmute', 'sets up the mute role')
 
 
 @is_owner()
@@ -2059,6 +2240,7 @@ async def setupmute(ctx):
 async def oauth(ctx):
     client_id = bot.user.id
     await ctx.send(f'https://discord.com/oauth2/authorize?client_id={client_id}&permissions=8&scope=bot')
+add_help('Owner', 'oauth', 'gives you the authorization link of the bot')
 
 
 @has_required_perm()
@@ -2077,69 +2259,14 @@ async def create_vote(ctx, *options):
     vote = await ctx.send(vote_message)
     for i in range(1, len(options) + 1):
         await vote.add_reaction(f"{i}\N{COMBINING ENCLOSING KEYCAP}")
-
-
-@has_owner_perm()
-@bot.command()
-async def plugins(ctx):
-    if config['plugins']:
-        message = '# Plugins:\n'
-        plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
-        for plugin_file in plugin_files:
-            if plugin_file.endswith(".py"):
-                message = message + "- " + plugin_file + '\n'
-        await ctx.send(message)
-    else:
-        await ctx.send("Plugin system is disabled.")
-
-
-@has_owner_perm()
-@bot.command()
-async def pluginsall(ctx):
-    if config['plugins']:
-        message = '# Plugins:\n'
-        plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
-        for plugin_file in plugin_files:
-            message = message + "- " + plugin_file + '\n'
-        await ctx.send(message)
-    else:
-        await ctx.send("Plugin system is disabled.")
-
-
-@has_owner_perm()
-@bot.command()
-async def disableplugin(ctx, plugin_name):
-    if config['plugins']:
-        plugin_path = os.path.join('plugins', plugin_name)
-        if os.path.exists(plugin_path) and plugin_name.endswith(".py"):
-            os.rename(plugin_path, plugin_path + ".disabled")
-            await ctx.send(f"Plugin `{plugin_name}` disabled successfully.")
-        else:
-            await ctx.send(f"Plugin `{plugin_name}` not found or already disabled. Please restart the bot")
-    else:
-        await ctx.send("Plugin system is disabled.")
-
-
-@has_owner_perm()
-@bot.command()
-async def enableplugin(ctx, plugin_name):
-    if config['plugins']:
-        disabled_plugin_path = os.path.join('plugins', plugin_name + ".disabled")
-        if os.path.exists(disabled_plugin_path):
-            enabled_plugin_path = os.path.join('plugins', plugin_name)
-            os.rename(disabled_plugin_path, enabled_plugin_path)
-            await ctx.send(f"Plugin `{plugin_name}` enabled successfully. Please restart the bot")
-        else:
-            await ctx.send(f"Plugin `{plugin_name}` not found or already enabled.")
-    else:
-        await ctx.send("Plugin system is disabled.")
+add_help('Moderation', 'createvote <options>', 'creates a vote between options')
 
 
 @has_required_perm()
 @bot.command(name="roles")
 async def rolelist(ctx, user: discord.Member = None):
     if user is not None:
-        roles = user.roles[1:]  # Exclude @everyone role
+        roles = user.roles[1:]
         if not roles:
             await ctx.send(f"{user.display_name} has no roles.")
             return
@@ -2155,6 +2282,7 @@ async def rolelist(ctx, user: discord.Member = None):
         else:
             msg = "List of all the roles in the server:" + role_list
         await ctx.send(msg)
+add_help('Moderation', 'roles [member]', 'lists all roles in server or the roles of a user')
 
 
 if config['chatbot']:
@@ -2222,12 +2350,11 @@ if config['chatbot']:
             except asyncio.TimeoutError:
                 await ctx.send('You took too long to respond. Answer recording canceled.')
 
-import json
-import os
-import discord
+
+    add_help('General', 'b <message>', 'Talk with chatbot')
+
 
 ticket_ids = {}
-# Load or initialize the ticket data
 if not os.path.exists('ticket_numbers.json'):
     with open('ticket_numbers.json', 'w') as f:
         json.dump({}, f)
@@ -2237,7 +2364,6 @@ with open('ticket_numbers.json', 'r') as f:
 
 
 def save_ticket_data():
-    """Save the updated ticket data to the JSON file."""
     with open('ticket_numbers.json', 'w') as f:
         json.dump(ticket_ids, f)
 
@@ -2247,7 +2373,6 @@ async def handle_ticket_creation(interaction, bot):
     guild_id = str(guild.id)
     user_id = str(interaction.user.id)
 
-    # Initialize guild data if not present
     if guild_id not in ticket_ids:
         ticket_ids[guild_id] = {'counter': 1, 'users': {}}
 
@@ -2301,7 +2426,6 @@ async def handle_ticket_creation(interaction, bot):
             if server_configs[str(interaction.guild.id)].get('ticket_message'):
                 message = server_configs[str(interaction.guild.id)]['ticket_message']
                 ticket_message = replace_placeholders(message, interaction.user)
-        print(ticket_message)
         await channel.send(ticket_message)
 
 
@@ -2377,7 +2501,6 @@ async def handle_ticket_closure(interaction, bot):
             if not archive_category:
                 archive_category = await interaction.guild.create_category(name="Archived Tickets")
 
-            # Remove user's access from the channel and revoke permissions from everyone
             overwrites = {
                 interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 interaction.user: discord.PermissionOverwrite(read_messages=False),
@@ -2388,7 +2511,6 @@ async def handle_ticket_closure(interaction, bot):
             await interaction.channel.send("Ticket archived successfully.")
             await transcribe_ticket(interaction)
 
-            # Add DeleteTicketView to the archived ticket channel for staff
             view = DeleteTicketView(bot)
             await interaction.channel.send("Click the button below to delete this ticket.", view=view)
 
@@ -2659,141 +2781,13 @@ else:
 async def afk(ctx, *, message="AFK"):
     afk_users[str(ctx.author.id)] = {
         "message": message,
-        "time": datetime.now().isoformat(),
+        "time": ttime().isoformat(),
         "mentions": []
     }
     with open(afk_file, 'w') as f:
         json.dump(afk_users, f, indent=4)
     await ctx.send(f"{ctx.author.mention} is now AFK: {message}")
-
-
-timers = {}
-
-
-def save_timers_state():
-    save_data = {name: {'remaining_time': info['remaining_time'], 'start_time': info['start_time']}
-                 for name, info in timers.items()}
-
-    with open(TIMER_FILE, 'wb') as f:
-        pickle.dump(save_data, f)
-
-
-def load_timers_state():
-    try:
-        with open(TIMER_FILE, 'rb') as f:
-            save_data = pickle.load(f)
-            return {name: {'remaining_time': info['remaining_time'], 'start_time': info['start_time'], 'ctx': None,
-                           'initiator': None}
-                    for name, info in save_data.items()}
-    except (FileNotFoundError, EOFError):
-        return {}
-    except Exception as e:
-        print(f"Error loading timers state: {e}")
-        return {}
-
-
-@bot.command(name='starttimer', aliases=['timer'])
-async def start_timer(ctx, duration_str: str, *, timer_name: str = None):
-    if timer_name is None:
-        timer_name = f"{ctx.author.name}-{ctx.guild.name}-{ctx.channel.name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-    if timer_name in timers:
-        await ctx.send(f"Timer '{timer_name}' is already running.")
-        return
-
-    duration_seconds = parse_duration(duration_str)
-    if duration_seconds is None:
-        await ctx.send("Invalid time format. Use `<number>w|d|h|m|s`.")
-        return
-
-    start_time = datetime.now(timezone.utc)
-
-    timers[timer_name] = {
-        'remaining_time': duration_seconds,
-        'start_time': start_time,
-        'ctx': ctx,
-        'initiator': ctx.author.id
-    }
-
-    await ctx.send(f"Timer '{timer_name}' started for {format_duration(duration_seconds)}.")
-    await bot.loop.create_task(update_timer(timer_name))
-
-
-@bot.command(name='stoptimer')
-async def stop_timer(ctx, timer_name: str):
-    if timer_name in timers:
-        timers.pop(timer_name)
-        await ctx.send(f"Timer '{timer_name}' stopped.")
-    else:
-        await ctx.send(f"Timer '{timer_name}' is not running.")
-
-
-@bot.command(name='listtimers')
-async def list_timers(ctx):
-    if timers:
-        timer_list = "\n".join([f"{name}: {format_duration(info['remaining_time'])}" for name, info in timers.items()])
-        await ctx.send(f"Active timers:\n{timer_list}")
-    else:
-        await ctx.send("No timers are currently running.")
-
-
-async def update_timer(timer_name):
-    await asyncio.sleep(timers[timer_name]['remaining_time'])
-
-    if timer_name in timers:
-        initiator_id = timers[timer_name]['initiator']
-        initiator = bot.get_user(initiator_id)
-        if initiator:
-            await timers[timer_name]['ctx'].send(f"<@{initiator_id}> Your timer '{timer_name}' has ended!")
-        timers.pop(timer_name)
-        save_timers_state()
-
-
-def parse_duration(duration_str):
-    total_seconds = 0
-    duration_regex = re.compile(r'(?P<amount>\d+)\s*(?P<unit>[wdhms])', re.IGNORECASE)
-    matches = duration_regex.finditer(duration_str)
-    for match in matches:
-        amount = int(match.group('amount'))
-        unit = match.group('unit').lower()
-        if unit == 'w':
-            total_seconds += amount * 7 * 24 * 3600
-        elif unit == 'd':
-            total_seconds += amount * 24 * 3600
-        elif unit == 'h':
-            total_seconds += amount * 3600
-        elif unit == 'm':
-            total_seconds += amount * 60
-        elif unit == 's':
-            total_seconds += amount
-    return total_seconds
-
-
-def format_duration(seconds):
-    intervals = (
-        ('w', 7 * 24 * 3600),
-        ('d', 24 * 3600),
-        ('h', 3600),
-        ('m', 60),
-        ('s', 1)
-    )
-
-    result = []
-    for name, count in intervals:
-        value = seconds // count
-        if value:
-            seconds -= value * count
-            result.append(f"{value}{name}")
-    return ' '.join(result) or '0s'
-
-
-@bot.command(name='infotimer')
-async def info_timer(ctx, timer_name: str):
-    if timer_name in timers:
-        remaining_time = timers[timer_name]['remaining_time']
-        await ctx.send(f"Timer '{timer_name}' - Time remaining: {format_duration(remaining_time)}")
-    else:
-        await ctx.send(f"Timer '{timer_name}' is not running.")
+add_help('General', 'afk [reason]', 'Sets you as afk until you send another message')
 
 
 @bot.command()
@@ -2809,6 +2803,7 @@ async def hide(ctx):
         await ctx.send("I don't have permission to modify channel permissions.", delete_after=5)
     except discord.HTTPException as e:
         await ctx.send(f"Failed to hide the channel: {e}", delete_after=5)
+add_help('Moderation', 'hide', 'hides a channel')
 
 
 @bot.command()
@@ -2824,13 +2819,7 @@ async def unhide(ctx):
         await ctx.send("I don't have permission to modify channel permissions.", delete_after=5)
     except discord.HTTPException as e:
         await ctx.send(f"Failed to unhide the channel: {e}", delete_after=5)
-
-
-@bot.command(name="sync")
-async def sync_commands(ctx):
-    await ctx.send("Syncing.....")
-    await bot.sync_commands()
-    await ctx.send("Sync complete")
+add_help('Moderation', 'unhide', 'unhides a channel')
 
 
 @bot.command(name='ch')
@@ -2838,7 +2827,7 @@ async def sync_commands(ctx):
 async def manage_channel(ctx, action: str, *args):
     if action in ['create', 'vcreate']:
         if len(args) < 1:
-            await ctx.send(f"Usage: !ch:{action}:<channel_name>[:<channel_category>][:<force_create_category>]")
+            await ctx.send(f"Usage: {bot_prefix}ch:{action}:<channel_name>[:<channel_category>][:<force_create_category>]")
             return
 
         channel_name = args[0]
@@ -2898,6 +2887,7 @@ async def manage_channel(ctx, action: str, *args):
 
     else:
         await ctx.send("Unknown action. Use 'create', 'vcreate', 'rename', 'delete', or 'deleteall'.")
+add_help('Moderation', 'ch <action>', "Channel actions: 'create', 'vcreate', 'rename', 'delete', or 'deleteall'.")
 
 
 translator = Translator()
@@ -2906,7 +2896,6 @@ translator = Translator()
 @bot.command(name='trans')
 async def translate(ctx, *, text: str = None):
     if text:
-        # Translate the provided text
         try:
             translated = translator.translate(text, dest='en')
             if translated and translated.text:
@@ -2916,7 +2905,6 @@ async def translate(ctx, *, text: str = None):
         except Exception as e:
             await ctx.send(f'Error: {str(e)}')
     elif ctx.message.reference:
-        # Translate the replied-to message
         try:
             referenced_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             text_to_translate = referenced_message.content
@@ -2929,6 +2917,7 @@ async def translate(ctx, *, text: str = None):
             await ctx.send(f'Error: {str(e)}')
     else:
         await ctx.send('Please provide text to translate or reply to a message with `.trans`.')
+add_help('General', 'trans [text]', 'translates given text or reference message')
 
 
 user_language_settings = {}
@@ -2937,7 +2926,7 @@ user_language_settings = {}
 @bot.command(name='translang')
 async def set_translation_language(ctx: discord.ApplicationContext, language: str = None, user: discord.User = None):
     userid = user.id if user else ctx.author.id
-    if language.lower() == 'none':
+    if language.lower() in ['none', 'off', 'null']:
         if userid in user_language_settings:
             del user_language_settings[userid]
         await ctx.send("Default translation language disabled.")
@@ -2949,12 +2938,31 @@ async def set_translation_language(ctx: discord.ApplicationContext, language: st
                 f"Default translation language set to '{SUPPORTED_LANGUAGES[language_code]}' for user <@{userid}>")
         else:
             await ctx.send(f"Invalid language. Please choose from supported languages or 'none'.")
+add_help('General', 'translang <language code/off> [user]', 'Enables automatic translation and to a language for yourself or a user')
 
 
-@bot.command(name='supported_languages', aliases=['langs', 'languages'])
+@bot.command(name='supported_languages', aliases=['langs', 'languages', 'translangs'])
 async def show_supported_languages(ctx):
     languages_list = "\n".join([f"`{lang_code}` - {lang_name}" for lang_code, lang_name in SUPPORTED_LANGUAGES.items()])
     await ctx.send(f"Supported Languages:\n{languages_list}")
+add_help('General', 'languages', 'lists all available languages for translation and their language code')
+
+
+@is_owner()
+@bot.command()
+async def update(ctx):
+    url = api + "/get_release"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(__file__, 'w', encoding='utf-8') as script_file:
+                script_file.write(response.text)
+            await ctx.send("Update successful! Please restart the bot...")
+        else:
+            await ctx.send(f"Failed to update. Status code: {response.status_code}")
+    except Exception as e:
+        await ctx.send(f"Failed to update. Error: {e}")
+add_help('Owner', 'update', 'Updates the bot to the latest version')
 
 
 if 'dev' in current_version:
@@ -2972,22 +2980,51 @@ if 'dev' in current_version:
                 await ctx.send(f"Failed to update. Status code: {response.status_code}")
         except Exception as e:
             await ctx.send(f"Failed to update. Error: {e}")
+    add_help('DEV', 'pullupdate', 'pulls the latest development version of the bot')
+
+
+    if config['plugins']:
+        @is_owner()
+        @bot.command()
+        async def getplugin(ctx: discord.ApplicationContext, plugin: str = ''):
+            url = api + f"/get_plugin/{plugin}"
+            try:
+                response = requests.get(url)
+                if response.status_code == 200:
+                    with open(f'plugins/{plugin}.py', 'w', encoding='utf-8') as script_file:
+                        script_file.write(response.text)
+                    await ctx.send("Plugin downloaded, please restart bot")
+                else:
+                    await ctx.send(f"Failed to download plugin. Status code: {response.status_code}")
+            except Exception as e:
+                await ctx.send(f"Failed to download. Error: {e}")
+        add_help('DEV', 'getplugin <plugin>', 'downloads a plugin from the official in progress plugins list')
 
 if config['plugins']:
+
     @is_owner()
-    @bot.command()
-    async def getplugin(ctx: discord.ApplicationContext, plugin: str = ''):
-        url = api + f"/get_plugin/{plugin}"
-        try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                with open(f'plugins/{plugin}.py', 'w', encoding='utf-8') as script_file:
-                    script_file.write(response.text)
-                await ctx.send("Plugin downloaded, please restart bot")
-            else:
-                await ctx.send(f"Failed to download plugin. Status code: {response.status_code}")
-        except Exception as e:
-            await ctx.send(f"Failed to update. Error: {e}")
+    @bot.command(name='downloadplugin')
+    async def download_plugin_group(ctx, plugin_name:str = None):
+        if plugin_name:
+            url = api + f"/get_plugin_release/{current_version}/{plugin_name}"
+            try:
+                response = requests.get(url)
+                if response.status_code == 200:
+                    with open(f'plugins/{plugin_name}.py', 'w', encoding='utf-8') as script_file:
+                        script_file.write(response.text)
+                    await ctx.send("Plugin downloaded, please restart bot")
+                else:
+                    await ctx.send(f"Failed to download plugin. Status code: {response.status_code}")
+            except Exception as e:
+                await ctx.send(f"Failed to download. Error: {e}")
+        else:
+            plugin_list = requests.get(f'{api}/get_plugins_list/{current_version}').json()
+            response = '# Available plugins:\n'
+            for plugin in plugin_list:
+                response += f"- **{plugin[:-3]}**\n"
+            response += f'**To download a plugin use:** `{bot_prefix}downloadplugin [plugin name]`'
+            await ctx.send(response)
+        add_help('Owner', 'downloadplugin [plugin name]', 'downloads a plugin from the official plugins list or lists all the available plugins if no arguments provide')
 
 
     @is_owner()
@@ -2997,15 +3034,76 @@ if config['plugins']:
             return await ctx.send('Plugin not found')
         try:
             os.remove(f'plugins/{plugin}.py')
-            await ctx.send(f'Plugin: {plugin} removed successfully! ')
+            await ctx.send(f'Plugin: {plugin} removed successfully! Please restart the bot')
         except Exception as e:
             await ctx.send(f'An error occurred: {e}')
+    add_help('Owner', 'rmplugin <plugin>', 'deletes an installed plugin')
+
+
+    @is_owner()
+    @bot.command()
+    async def plugins(ctx):
+        if config['plugins']:
+            message = '# Plugins:\n'
+            plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
+            for plugin_file in plugin_files:
+                if plugin_file.endswith(".py"):
+                    message = message + "- " + plugin_file + '\n'
+            await ctx.send(message)
+        else:
+            await ctx.send("Plugin system is disabled.")
+    add_help('Owner', 'plugins', 'Lists the available plugins')
+
+
+    @is_owner()
+    @bot.command()
+    async def pluginsall(ctx):
+        if config['plugins']:
+            message = '# Plugins:\n'
+            plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
+            for plugin_file in plugin_files:
+                message = message + "- " + plugin_file + '\n'
+            await ctx.send(message)
+        else:
+            await ctx.send("Plugin system is disabled.")
+    add_help('Owner', 'pluginsall', 'shows all files in plugins folder')
+
+
+    @is_owner()
+    @bot.command()
+    async def disableplugin(ctx, plugin_name):
+        if config['plugins']:
+            plugin_path = os.path.join('plugins', plugin_name)
+            if os.path.exists(plugin_path) and plugin_name.endswith(".py"):
+                os.rename(plugin_path, plugin_path + ".disabled")
+                await ctx.send(f"Plugin `{plugin_name}` disabled successfully.")
+            else:
+                await ctx.send(f"Plugin `{plugin_name}` not found or already disabled. Please restart the bot")
+        else:
+            await ctx.send("Plugin system is disabled.")
+    add_help('Owner', 'disableplugin <plugin>', 'disables a plugin')
+
+
+    @is_owner()
+    @bot.command()
+    async def enableplugin(ctx, plugin_name):
+        if config['plugins']:
+            disabled_plugin_path = os.path.join('plugins', plugin_name + ".disabled")
+            if os.path.exists(disabled_plugin_path):
+                enabled_plugin_path = os.path.join('plugins', plugin_name)
+                os.rename(disabled_plugin_path, enabled_plugin_path)
+                await ctx.send(f"Plugin `{plugin_name}` enabled successfully. Please restart the bot")
+            else:
+                await ctx.send(f"Plugin `{plugin_name}` not found or already enabled.")
+        else:
+            await ctx.send("Plugin system is disabled.")
+    add_help('Owner', 'enableplugin <plugin>', 'Enables a plugin')
 
 
 @bot.command(name='autoroleadd')
 @has_required_perm()
 async def autoroleadd(ctx, role: discord.Role):
-    guild_id = ctx.guild.id
+    guild_id = str(ctx.guild.id)
     if guild_id not in server_roles:
         server_roles[guild_id] = []
     if role.id not in server_roles[guild_id]:
@@ -3014,18 +3112,20 @@ async def autoroleadd(ctx, role: discord.Role):
         await ctx.send(f'Role {role.mention} added to auto-roles for this server.')
     else:
         await ctx.send(f'Role {role.mention} is already in the auto-roles list.')
+add_help('Moderation', 'autoroleadd <role>', 'adds a role to auto role list')
 
 
 @bot.command(name='autoroleremove')
 @has_required_perm()
 async def autoroleremove(ctx, role: discord.Role):
-    guild_id = ctx.guild.id
+    guild_id = str(ctx.guild.id)
     if guild_id in server_roles and role.id in server_roles[guild_id]:
         server_roles[guild_id].remove(role.id)
         save_roles()
         await ctx.send(f'Role {role.mention} removed from auto-roles for this server.')
     else:
         await ctx.send(f'Role {role.mention} is not in the auto-roles list.')
+add_help('Moderation', 'autoroleremove <role>', 'removes a role from the auto role list')
 
 
 @bot.command(name='autoroles')
@@ -3039,12 +3139,14 @@ async def autoroles(ctx):
             if role_object:
                 roles_list.append(role_object.name)
             else:
+                server_roles[guild_id].remove(role_id)
                 roles_list.append(f"`Role ID {role_id} (deleted)`")
 
         roles_display = "\n".join(roles_list)
         await ctx.send(f"Auto-roles for this server:\n{roles_display}")
     else:
         await ctx.send("There are no auto-roles configured for this server.")
+add_help('Moderation', 'autoroles', 'lists all the autoroles for the server ')
 
 
 @bot.command('buttons')
@@ -3093,22 +3195,6 @@ async def buttons_(ctx, *, arg: str):
         await ctx.send('Invalid command or arguments')
 
 
-@bot.command()
-async def search(ctx, *, query: str):
-    """Searches DuckDuckGo for the given query and returns the top result."""
-    search_url = f'https://api.duckduckgo.com/?q={query}&format=json&pretty=1'
-    response = requests.get(search_url)
-    data = response.json()
-    print(data)
-    if data['AbstractText']:
-        title = data['Heading']
-        snippet = data['AbstractText']
-        link = data['AbstractURL']
-        await ctx.send(f'**{title}**\n{snippet}\n<{link}>')
-    else:
-        await ctx.send('No results found.')
-
-
 personal_vcs = {}
 DATA_FILE = 'guild_vcs_data.json'
 
@@ -3148,6 +3234,7 @@ async def setupvc(ctx, user_limit: int = 0):
 
     await ctx.send(
         f"Join to Create VC created: {join_to_create_channel.mention}. Private VCs will have a user limit of {user_limit if user_limit > 0 else 'unlimited'}.")
+add_help('Moderation', 'setupvc [limit]', 'join to create vc channel with optional limit')
 
 
 @has_required_perm()
@@ -3164,6 +3251,7 @@ async def join_vc(ctx: discord.ApplicationContext, vc: discord.VoiceChannel = No
             await vc.connect()
         except Exception as e:
             await ctx.send(f'An error occurred: {e}')
+add_help('Moderation', 'join', 'makes the bot join vc')
 
 
 @has_required_perm()
@@ -3179,20 +3267,22 @@ async def disconnect_vc(ctx: discord.ApplicationContext, user: discord.Member = 
         await ctx.send(f' disconnected {user.display_name} from {channel}')
     else:
         await ctx.send(f'{user.display_name} is not connected to a voice channel')
+add_help('Moderation', 'discon [user]', 'disconnets the bot if it has joined the vc or a user')
 
 
 @has_required_perm()
 @bot.group()
 async def embed(ctx):
     if ctx.invoked_subcommand is None:
-        await ctx.send(f"Invalid embed command. Use `{config.get('prefix')}embed create`, `"
-                       f"{config.get('prefix')}embed edit`, `{config.get('prefix')}embed delete`, or `{config.get(
-                           'prefix')}embed send`.")
+        await ctx.send(f"Invalid embed command")
 
+add_help('Moderation', 'embed <create/edit/addfield/deletefield/editfield/setcolor/setimage/setthumbnail/delete/send/list>', 'embed commands')
 
 @has_required_perm()
 @embed.command(name='create')
-async def create_embed(ctx, name: str, *, content: str = None):
+async def create_embed(ctx, name: str = None, *, content: str = None):
+    if not name:
+        return await ctx.send('Please provide a name')
     if name in embeds:
         await ctx.send(f"An embed with the name `{name}` already exists. Use `/embed edit` to modify it.")
         return
@@ -3216,7 +3306,10 @@ async def create_embed(ctx, name: str, *, content: str = None):
 
 @has_required_perm()
 @embed.command(name='edit')
-async def edit_embed(ctx, name: str, field: str, *, value: str):
+async def edit_embed(ctx, name: str = None, field: str = None, *, value: str = None):
+    if not name or not field or not value:
+        return await ctx.send("Please provide name field and value")
+
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`. Use `/embed create` to create it first.")
         return
@@ -3371,6 +3464,7 @@ async def def_welcome_channel(ctx, channel: discord.TextChannel = None):
     server_configs[server_id]['welcome_channel_id'] = channel.id if channel else ctx.channel.id
     save_server_configs(server_configs)
     await ctx.channel.send('Welcome channel defined successfully')
+add_help('Moderation', 'setwelcomechannel <channel>', 'defines the welcome message channel of a server')
 
 
 @has_required_perm()
@@ -3387,6 +3481,7 @@ async def rm_welcome_channel(ctx):
     server_configs[server_id].pop('welcome_channel_id')
     save_server_configs(server_configs)
     await ctx.send('Welcome channel removed successfully')
+add_help('Moderation', 'rmwelcomechannel', 'removes the defined welcome message channel')
 
 
 @has_required_perm()
@@ -3403,6 +3498,7 @@ async def def_welcome_embed(ctx, *, name:str = None):
     save_server_configs(server_configs)
 
     await ctx.channel.send('Welcome embed defined successfully')
+add_help('Moderation', 'setwelcomeembed <embed name>', 'sets the welcome embed for the server')
 
 
 @has_required_perm()
@@ -3415,6 +3511,7 @@ async def def_leave_channel(ctx, channel: discord.TextChannel = None):
     server_configs[server_id]['leave_channel_id'] = channel.id if channel else ctx.channel.id
     save_server_configs(server_configs)
     await ctx.channel.send('Leave channel defined successfully')
+add_help('Moderation', 'setleavechannel <channel>', 'defines the leave message channel of a server')
 
 
 @has_required_perm()
@@ -3431,6 +3528,7 @@ async def rm_leave_channel(ctx):
     server_configs[server_id].pop('leave_channel_id')
     save_server_configs(server_configs)
     await ctx.send('Leave channel removed successfully')
+add_help('Moderation', 'rmleavechannel', 'removes the defined leave message channel')
 
 
 @has_required_perm()
@@ -3447,105 +3545,256 @@ async def def_leave_embed(ctx, *, name:str = None):
     save_server_configs(server_configs)
 
     await ctx.channel.send('Leave embed defined successfully')
+add_help('Moderation', 'setleaveembed <embed name>', 'defines the leave embed for the server')
 
 
+@has_required_perm()
+@bot.command(name='setmembercountchannel')
+async def def_member_count_channel(ctx, channel: discord.abc.GuildChannel = None):
+    server_id = str(ctx.guild.id)
+    if server_id not in server_configs:
+        server_configs[server_id] = {}
+    if not channel:
+        channel = ctx.channel
 
-##Extra Stuff
+    server_configs[str(ctx.guild.id)]['member_count_channel'] = int(channel.id) if channel else None
+    save_server_configs(server_configs)
+
+    await ctx.channel.send('Member Count Channel defined successfully')
+add_help('Moderation', 'setmembercountchannel <channel>', 'removes the defined welcome message channel')
+
+
+@bot.group()
+async def antinuke(ctx):
+    if ctx.invoked_subcommand is None:
+        await ctx.send('Please use a valid subcommand: enable, disable, setlogschannel, rmlogschannel, whitelist, trustlist')
+add_help('Moderation', 'antinuke <enable/disable/setlogschannel/rmlogschannel/whitelist/trustlist>', 'antinuke commands')
+
+
+@antinuke.command(name='enable')
+async def enable_antinuke(ctx):
+    if not is_trusted(ctx.guild, ctx.author):
+        return await ctx.send('You are not authorized to use this command!')
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    server_configs[str(ctx.guild.id)]['antinuke'] = True
+    save_server_configs(server_configs)
+    await ctx.send("Antinuke enabled for this server")
+
+
+@antinuke.command(name='disable')
+async def disable_antinuke(ctx):
+    if not is_trusted(ctx.guild, ctx.author):
+        return await ctx.send('You are not authorized to use this command!')
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    server_configs[str(ctx.guild.id)]['antinuke'] = False
+    save_server_configs(server_configs)
+    await ctx.send("Antinuke disabled for this server")
+
+
+@antinuke.command(name='setlogschannel')
+async def set_logs_channel_antinuke(ctx, channel: discord.TextChannel = None):
+    if not is_trusted(ctx.guild, ctx.author):
+        return await ctx.send('You are not authorized to use this command!')
+    if not channel:
+        channel = ctx.channel
+
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    server_configs[str(ctx.guild.id)]['antinuke_logs_channel'] = channel.id
+    save_server_configs(server_configs)
+    await ctx.send("Antinuke logs channel defined successfully")
+
+
+@antinuke.command(name='rmlogschannel')
+async def rm_logs_channel_antinuke(ctx):
+    if not is_trusted(ctx.guild, ctx.author):
+        return await ctx.send('You are not authorized to use this command!')
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    if server_configs[str(ctx.guild.id)].get('antinuke_logs_channel'):
+        server_configs[str(ctx.guild.id)].pop('antinuke_logs_channel')
+    save_server_configs(server_configs)
+    await ctx.send("Antinuke logs channel removed successfully")
+
+
+@antinuke.command(name='whitelist')
+async def whitelist_antinuke(ctx, subcommand: str = None, user: discord.User = None):
+    if not is_trusted(ctx.guild, ctx.author):
+        return await ctx.send('You are not authorized to use this command!')
+    guild_id = str(ctx.guild.id)
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    if not subcommand and not user:
+        return await ctx.send("**Current whitelist:**\n" + "\n - ".join(f"- <@{user_id}>" for user_id in server_configs[guild_id]['antinuke_whitelist']))
+
+    if not subcommand or not user:
+        return await ctx.send("Please provide a subcommand add or remove and a user")
+    if subcommand == 'add':
+        if not server_configs[guild_id].get('antinuke_whitelist'):
+            server_configs[guild_id]['antinuke_whitelist'] = []
+        if not user.id in server_configs[guild_id]['antinuke_whitelist']:
+            server_configs[guild_id]['antinuke_whitelist'].append(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User added to whitelist successfully")
+    if subcommand == 'remove':
+        if not server_configs[guild_id].get('antinuke_whitelist'):
+            server_configs[guild_id]['antinuke_whitelist'] = []
+        if user.id in server_configs[guild_id]['antinuke_whitelist']:
+            server_configs[guild_id]['antinuke_whitelist'].remove(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User removed from whitelist successfully")
+
+
+@antinuke.command(name='trust')
+async def trust_antinuke(ctx, subcommand: str = None, user: discord.User = None):
+    if not is_trusted(ctx.guild, ctx.author):
+        return await ctx.send('You are not authorized to use this command!')
+    guild_id = str(ctx.guild.id)
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    if not subcommand and not user:
+        return await ctx.send("**Current trust list:**\n" + "\n - ".join(
+            f"- <@{user_id}>" for user_id in server_configs[guild_id]['antinuke_trustlist']))
+    if not subcommand or not user:
+        return await ctx.send("Please provide a subcommand add or remove and a user")
+    if subcommand == 'add':
+        if not server_configs[guild_id].get('antinuke_trustlist'):
+            server_configs[guild_id]['antinuke_trustlist'] = []
+        if not user.id in server_configs[guild_id]['antinuke_trustlist']:
+            server_configs[guild_id]['antinuke_trustlist'].append(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User added to trust list successfully")
+    if subcommand == 'remove':
+        if not server_configs[guild_id].get('antinuke_trustlist'):
+            server_configs[guild_id]['antinuke_trustlist'] = []
+        if user.id in server_configs[guild_id]['antinuke_trustlist']:
+            server_configs[guild_id]['antinuke_trustlist'].remove(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User removed from trust list successfully")
+
+
+@bot.command(name='authorization')
+@has_owner_perm()
+async def authorization_server(ctx, subcommand: str = None, user: discord.User = None):
+    guild_id = str(ctx.guild.id)
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    if not subcommand and not user:
+        return await ctx.send("**Current authorized list:**\n" + "\n - ".join(
+            f"- <@{user_id}>" for user_id in server_configs[guild_id]['authorized_users']))
+    if not subcommand or not user:
+        return await ctx.send("Please provide a subcommand add or remove and a user")
+    if subcommand == 'add':
+        if not server_configs[guild_id].get('authorized_users'):
+            server_configs[guild_id]['authorized_users'] = []
+        if not user.id in server_configs[guild_id]['authorized_users']:
+            server_configs[guild_id]['authorized_users'].append(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User added to authorized list successfully")
+    if subcommand == 'remove':
+        if not server_configs[guild_id].get('authorized_users'):
+            server_configs[guild_id]['authorized_users'] = []
+        if user.id in server_configs[guild_id]['authorized_users']:
+            server_configs[guild_id]['authorized_users'].remove(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User removed from authorized list successfully")
+add_help('Moderation', 'authorization <add/remove> <user>', 'Authorizes users for Moderation level command permissions')
+
+
+@bot.command(name='owner')
+@has_owner_perm()
+async def ownerization_server(ctx, subcommand: str = None, user: discord.User = None):
+    guild_id = str(ctx.guild.id)
+    if not server_configs.get(str(ctx.guild.id)):
+        server_configs[str(ctx.guild.id)] = {}
+    if not subcommand and not user:
+        return await ctx.send("**Current owner list:**\n" + "\n - ".join(
+            f"- <@{user_id}>" for user_id in server_configs[guild_id]['owners']))
+    if not subcommand or not user:
+        return await ctx.send("Please provide a subcommand add or remove and a user")
+    if subcommand == 'add':
+        if not server_configs[guild_id].get('owners'):
+            server_configs[guild_id]['owners'] = []
+        if not user.id in server_configs[guild_id]['owners']:
+            server_configs[guild_id]['owners'].append(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User added to authorized list successfully")
+    if subcommand == 'remove':
+        if not server_configs[guild_id].get('owners'):
+            server_configs[guild_id]['owners'] = []
+        if user.id in server_configs[guild_id]['owners']:
+            server_configs[guild_id]['owners'].remove(user.id)
+        save_server_configs(server_configs)
+        await ctx.send("User removed from authorized list successfully")
+add_help('Moderation', 'owner <add/remove> <user>', 'Authorizes users for Server owner level command permissions')
+
 bot.remove_command('help')
 
 
 @bot.command(name='help', aliases=['h'])
-async def help(ctx, typ=None):
-    if not typ:
-        prefix = config['prefix']
-        owner_id = config['owner_id']
-        owner = await bot.fetch_user(owner_id)
-        economycommands = (f""" **Economy Commands**
-`{prefix}register` - Register a account for currency.
-`{prefix}cf <value>` - Coin flips and decides what you won or lose.
-`{prefix}daily` - Claims daily reward.
-`{prefix}lb` - Shows leaderboard
-`{prefix}loan` - Gives a loan of 500 coins.
-`{prefix}returnloan` - Returns loan if taken.
-""")
-        help_msg = (f'''
-Now also supports /slash commands.
-For Moderation commands type {prefix}h mod.
-For Owner commands type {prefix}h owner.
-For More Info Contact <@{owner.id}>.
-**Commands:**
-`{prefix}help or {prefix}h` - Show this help message.
-`{prefix}random <min> <max>` - Gives you a random number.
-`{prefix}ping` - checks the ping of bot.
-`{prefix}getpfp <user ping>` - Get PFP of ANYONE IN THE DISCORD SERVER.
-`{prefix}poll` - Creates a poll in your next message.
-`{prefix}userinfo <user>` - Displays info about a user.
-`{prefix}suggest <suggestion> - Suggests your idea to the server owner (only works if suggestions are enabled)`
-`{prefix}afk` - Marks you as afk.
-`{prefix}membercount` - pretty self explanatory.
-`{prefix}si` - Shows server information.
-`{prefix}trans` [text] - translates a text to english.
-`{prefix}translang` <lang> - after selecting a language ever message that user send would be translated by the bot to that language.
-''')
-        if IsEconomy:
-            help_msg = help_msg + economycommands
+async def help(ctx, *, category: str = None):
+    def create_pages(commands, category_name=None):
+        pages = []
+        current_page = f"# {category_name}\n\n" if category_name else ""
+        for cmd, desc in commands.items():
+            command_text = f"- **{bot_prefix}{cmd}**: {desc}\n"
+            if len(current_page) + len(command_text) > 2000:
+                pages.append(current_page)
+                current_page = f"# {category_name}\n\n" if category_name else ""
+                current_page += command_text
+            else:
+                current_page += command_text
+        if current_page:
+            pages.append(current_page)
+        return pages
 
-        await ctx.send(help_msg)
-        return
-    elif typ == 'owner':
-        prefix = config['prefix']
-        help_msg = (f'''**Commands:**
-`{prefix}setstatus` - Custom Status.
-`{prefix}clearstatus` - Clears Custom Status.
-`{prefix}shutdown` - Shutsdown the bot.
-`{prefix}postjoinsetup` - Sets up a few things for the bot to work properly in the server (bot owner only).
-`{prefix}oauth` - generates a OAuth link for inviting the bot (bot owner only).
-`{prefix}plugins` - shows all usable plugins.
-`{prefix}pluginsall` - shows all plugins including disabled ones or non-plugin files.
-`{prefix}disableplugin <plugin name>` - Disables a plugin.
-`{prefix}enableplugin <plugin name>` - Enables a plugin if disabled.
-`{prefix}setupmute` - sets up the Mute role. 
-For more information contact <@{creator_id}>.
-''')
-        await ctx.send(help_msg)
-        return
-    elif typ == 'mod':
-        prefix = config['prefix']
-        owner_id = config['owner_id']
-        owner = await bot.fetch_user(owner_id)
-        economycommands = (f'''**Economy Commands**
-`{prefix}cset <user> <value>` - sets coins for the given user.
-`{prefix}agive <user> <value>` - gives user the specified number of coins.
-`{prefix}adelete <user>` - delets a users account.
-`{prefix}reset <member>` - Resets account of a member.
-''')
-        help_msg = (f'''**Commands:**
-`{prefix}ban <member> <reason>` - Bans a member from the server.
-`{prefix}unban <member>` - Unbans a member from the server.
-`{prefix}kick <member>` - Kicks a member from the server.
-`{prefix}mute <member>` - Mutes a member of the server.
-`{prefix}unmute <member>` - Un-mutes a member of the server
-`{prefix}setnickname <member>` - Changes nickname of a member.
-`{prefix}nickname <value>` - Changes nickname of the bot.
-`{prefix}addrole <member> <role>` - Adds a role to a member.
-`{prefix}removerole <member> <role>` - Remove role from a member.
-`{prefix}createrole <value>` - Creates a role.
-`{prefix}deleterole <value>` - Deletes a role.
-`{prefix}changerolecolor <values> <hex value>` - Changes role colour.
-`{prefix}clear` - deletes messages of the chat.
-`{prefix}reloadresponse` - reloads custom responses.
-`{prefix}roleall <role mention>` - gives all members a role.
-`{prefix}removeall <role mention>` - removes a role from all members.
-`{prefix}roles [user]` - shows all the roles in server or roles a user has.
-`{prefix}hide` - hides a channel.
-`{prefix}unhide` - unhides a channel.
-For More Info Contact <@{owner.id}>.
-''')
-        if IsEconomy:
-            help_msg = help_msg + economycommands
+    lower_category = category.lower()
+    lower_helps = {key.lower(): value for key, value in helps.items()}
+    if not category:
+        help_msg = f"""
+# Help Menu
 
-        await ctx.send(help_msg)
+**Basics:**
+- <> - means mandatory arguments.
+- [] - means optional arguments.
 
+Use `{bot_prefix}help <category>` to browse commands.
+
+**Current available categories are:**
+- {'\n- '.join(helps.keys())}
+        """
+        pages = [help_msg]
+
+    elif lower_category in lower_helps:
+        commands = lower_helps[lower_category]
+        pages = create_pages(commands, category)
+    else:
+        help_msg = f"Category '{category}' not found. Use `{bot_prefix}help` to see all available categories."
+        pages = [help_msg]
+    current_page = 0
+    message = await ctx.send(pages[current_page])
+    if len(pages) > 1:
+        await message.add_reaction("⬅️")
+        await message.add_reaction("➡️")
+    def check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in ["⬅️", "➡️"] and reaction.message.id == message.id
+
+    while True:
+        try:
+            reaction, user = await bot.wait_for("reaction_add", timeout=60.0, check=check)
+            await message.remove_reaction(reaction.emoji, user)
+
+            if str(reaction.emoji) == "⬅️" and current_page > 0:
+                current_page -= 1
+                await message.edit(content=pages[current_page])
+            elif str(reaction.emoji) == "➡️" and current_page < len(pages) - 1:
+                current_page += 1
+                await message.edit(content=pages[current_page])
+        except asyncio.TimeoutError:
+            await message.clear_reactions()
+            break
 
 async def default_callback(interaction):
     await interaction.respond(f'Pressed Button: {interaction.data["custom_id"]}')
@@ -3553,17 +3802,9 @@ async def default_callback(interaction):
 
 def check_for_updates():
     try:
-        global current_version
-        ACCESS_TOKEN = os.environ.get('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')
-        REPO_NAME = 'VA-S-BOT'
-        REPO_OWNER = 'DEAMJAVA'
-        g = Github(ACCESS_TOKEN)
-        repo = g.get_repo(f'{REPO_OWNER}/{REPO_NAME}')
         state = "Latest"
         devbuild = False
-
-        release = repo.get_latest_release()
-        latest_release = repo.get_latest_release().tag_name
+        latest_release = requests.get(f'{api}/get_latest').json()["latest_version"]
 
         latest_release = latest_release.strip('V')
 
@@ -3577,7 +3818,6 @@ def check_for_updates():
             outdated =   True
             state = "Outdated"
             logw(f'New version {latest_release} available!')
-            logw(f'Download URL: {release.html_url}')
         else:
             outdated = False
         if devbuild:
@@ -3585,14 +3825,8 @@ def check_for_updates():
 
         message = f"Running Current Version: {current_version} {state}"
         if outdated:
-            message = message + f'\nNew version {latest_release} available! \nDownload the Latest version at: {release.html_url}'
+            message = message + f'\nNew version {latest_release} available!'
         return message
-    except RateLimitExceededException:
-        logw('GitHub API rate limit exceeded, unable to check for updates at this time')
-        return 'GitHub API rate limit exceeded, unable to check for updates at this time'
-    except GithubException as e:
-        logw(f'Failed to check for updates due to GitHub error: {e}')
-        return f'Failed to check for updates due to GitHub error: {e}'
     except Exception as e:
         logw(f'Failed to check for updates due to an unexpected error: {e}')
         return f'Failed to check for updates due to an unexpected error: {e}'
@@ -3600,27 +3834,6 @@ def check_for_updates():
 
 if config['check_for_updates']:
     log(check_for_updates())
-
-
-def update_code(server_url):
-    try:
-        with urllib.request.urlopen(server_url) as response:
-            updated_script = response.read()
-
-        temp_file = "temp_script.py"
-        with open(temp_file, 'wb') as file:
-            file.write(updated_script)
-
-        os.replace(temp_file, __file__)
-
-        print("Script updated successfully.")
-
-        python = sys.executable
-        subprocess.Popen([python, __file__])
-        sys.exit()
-
-    except Exception as e:
-        print(f"Error updating script: {e}")
 
 
 def log_to_file(message, date_string, log_dir):
@@ -3654,7 +3867,7 @@ async def check_message(message, keywords, caps):
 async def process_responses(message, responses):
     for key, response_data in responses.items():
         keywords = response_data['keywords']
-        response = response_data['response']
+        response = replace_placeholders(response_data['response'], message.author)
         caps = response_data.get('caps', False)
 
         if response_data.get('type', 'any') == "all":
@@ -3710,9 +3923,8 @@ async def on_voice_state_update(member: discord.Member, before, after):
                 save_vc_data()
 
     if config['log']:
-        now = datetime.now()
-        date_string = now.strftime('%Y-%m-%d')
-        time_string = now.strftime('%H-%M-%S')
+        date_string = ttime().strftime('%Y-%m-%d')
+        time_string = ttime().strftime('%H-%M-%S')
         log_dir = os.path.join('Logs', date_string, sanitize_filename(member.guild.name), 'Voice States')
 
         if before.channel != after.channel:
@@ -3728,9 +3940,8 @@ async def on_voice_state_update(member: discord.Member, before, after):
 @bot.event
 async def on_member_update(before, after):
     if config['log']:
-        now = datetime.now()
-        date_string = now.strftime('%Y-%m-%d')
-        time_string = now.strftime('%H-%M-%S')
+        date_string = ttime().strftime('%Y-%m-%d')
+        time_string = ttime().strftime('%H-%M-%S')
         log_dir = os.path.join('Logs', date_string, sanitize_filename(after.guild.name), 'Member Updates')
 
         if before.roles != after.roles:
@@ -3762,7 +3973,7 @@ async def on_message(message: discord.Message):
             target_lang = user_language_settings[message.author.id]
             if target_lang != 'none':
                 try:
-                    translated = translator.translate(message.content, dest=target_lang)
+                    translated = await translator.translate(message.content, dest=target_lang)
                     await message.reply(f"[Translated to {SUPPORTED_LANGUAGES[target_lang]}]: {translated.text}")
                 except Exception as e:
                     await message.channel.send(f"Translation failed: {str(e)}")
@@ -3775,9 +3986,8 @@ async def on_message(message: discord.Message):
             json.dump(afk_users, f, indent=4)
 
         afk_start_time = datetime.fromisoformat(afk_data['time'])
-        afk_duration = datetime.now() - afk_start_time
+        afk_duration = ttime() - afk_start_time
 
-        # Function to convert timedelta to a human-readable format
         def format_timedelta(td):
             seconds = int(td.total_seconds())
             periods = [
@@ -3824,9 +4034,8 @@ async def on_message(message: discord.Message):
     await process_responses(message, responses)
 
     if config['log']:
-        now = datetime.now()
-        date_string = now.strftime('%Y-%m-%d')
-        time_string = now.strftime('%H-%M-%S')
+        date_string = ttime().strftime('%Y-%m-%d')
+        time_string = ttime().strftime('%H-%M-%S')
 
         if message.content is None:
             msg = ''
@@ -3896,13 +4105,13 @@ async def example_call_back(interaction):
 
 
 async def example_select_menu_callback(interaction: discord.Interaction):
-    selected_values = interaction.data['values']  # List of selected values
+    selected_values = interaction.data['values']
     await interaction.response.send_message(f"You selected: {', '.join(selected_values)}")
 
 
 async def example_modal_callback(interaction: discord.Interaction, modal: ui.Modal):
-    input_1 = modal.children[0].value  # Value of the first TextInput
-    input_2 = modal.children[1].value  # Value of the second TextInput
+    input_1 = modal.children[0].value
+    input_2 = modal.children[1].value
     await interaction.response.send_message(f"Received: Input 1 = {input_1}, Input 2 = {input_2}")
 
 
@@ -3948,7 +4157,6 @@ if __name__ == '__main__' and config['plugins']:
     globals_dict = globals()
     for plugin_file in plugin_files:
         if plugin_file.endswith(".py"):
-            #log(f'Loading plugin: {plugin_file}')
             plugin_path = os.path.join(plugins_folder, plugin_file)
             with open(plugin_path, encoding='utf-8') as f:
                 try:
@@ -3992,11 +4200,6 @@ async def on_ready():
                     except Exception as e:
                         logw(f'Failed to load: {filename}: {e}')
 
-    global timers
-    timers = load_timers_state()
-
-    for timer_name in timers.keys():
-        await bot.loop.create_task(update_timer(timer_name))
 
     bot.add_view(CreateTicketView(bot))
     bot.add_view(CloseTicketView(bot))
@@ -4013,20 +4216,6 @@ async def on_ready():
     log('Starting Post Startup Setup')
     for guild in bot.guilds:
         bot_top_role = guild.get_member(bot.user.id).top_role
-        if not any(role.name == OWNER_PERMS_GROUP for role in guild.roles):
-            log(f'creating owner group in guild {guild}')
-            role = await guild.create_role(name=OWNER_PERMS_GROUP)
-            await role.edit(position=bot_top_role.position - 1)
-
-        if not any(role.name == MOD_PERMS_GROUP for role in guild.roles):
-            log(f'creating mod group in guild {guild}')
-            role = await guild.create_role(name=MOD_PERMS_GROUP)
-            await role.edit(position=bot_top_role.position - 2)
-
-        if not any(role.name == MEMBER_PERMS_GROUP for role in guild.roles):
-            log(f'creating member group in guild {guild}')
-            await guild.create_role(name=MEMBER_PERMS_GROUP)
-
         if not any(role.name == "Muted" for role in guild.roles):
             log(f"Creating 'Muted' role in guild {guild}")
             permissions = discord.Permissions(send_messages=False, speak=False)
@@ -4034,14 +4223,14 @@ async def on_ready():
             try:
                 if mute_role.position >= bot_top_role.position:
                     raise discord.HTTPException(None, "Role hierarchy issue")
-                await mute_role.edit(position=bot_top_role.position - 3)
+                await mute_role.edit(position=bot_top_role.position - 1)
             except discord.HTTPException as e:
                 logw(f"Failed to move 'Muted' role in {guild.name}: {e}")
                 log("Retrying hierarchy adjustment...")
                 bot_controlled_roles = [role for role in guild.roles if role.managed]
                 for role in bot_controlled_roles:
                     if role.position >= bot_top_role.position:
-                        await role.edit(position=bot_top_role.position - 3)
+                        await role.edit(position=bot_top_role.position - 1)
             for channel in guild.channels:
                 log(f"Setting 'Muted' permissions in guild {guild} channel {channel}")
                 try:
@@ -4049,14 +4238,20 @@ async def on_ready():
                 except Exception as e:
                     logw(e)
 
+        server_config = server_configs.get(str(guild.id))
+        if server_config:
+            if server_config.get('member_count_channel'):
+                channel = bot.get_channel(int(server_config.get('member_count_channel')))
+                if not channel:
+                    server_configs[str(guild.id)]['member_count_channel'] = None
+                    save_server_configs(server_configs)
+                else:
+                    member_count = len(channel.guild.members)
+                    await channel.edit(name=f'Members: {member_count}')
+
     await bot.sync_commands()
 
     log('Post Startup Finished!')
-
-    if config['member_count_id'] is not None:
-        channel = bot.get_channel(int(config['member_count_id']))
-        member_count = len(channel.guild.members)
-        await channel.edit(name=f'Members: {member_count}')
 
 
 def create_restart_script():
@@ -4108,15 +4303,11 @@ def retry_after_message(t):
 
 
 async def save_state_and_exit():
-    if timers:
-        save_timers_state()
     logger.info("Bot is shutting down...")
     await bot.close()
 
 
 async def restart_bot():
-    if timers:
-        save_timers_state()
     logger.info("Bot is restarting...")
     subprocess.Popen(["python", "restart_script.py"])
     await bot.close()
@@ -4132,7 +4323,6 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-# Function to run the bot
 def run_bot():
     create_restart_script()
     while True:
