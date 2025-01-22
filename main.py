@@ -1,9 +1,8 @@
-current_version = 'V12.1'
-current_config_format = '17'
+current_version = 'V12.3'
+current_config_format = '18'
 plugins_folder = 'plugins'
 creator_id = '938059286054072371'
 api = 'http://192.9.183.164:25041'
-TIMER_FILE = 'time.r'
 
 libraries = """
 aiohappyeyeballs==2.4.4
@@ -51,6 +50,7 @@ yt-dlp==2024.12.23
 
 try:
     import os
+    import inspect
     import subprocess
     import textwrap
     import pickle
@@ -70,10 +70,13 @@ try:
     import traceback
     import requests
     import urllib.request
+    import base64
+    import glob
     import importlib.util
     from discord import Option, SelectOption, ui, InputText
     from googletrans import Translator
     from datetime import datetime, timedelta, timezone
+    from collections import defaultdict, deque
     from github import Github, RateLimitExceededException, GithubException
     from discord import Status
     from discord.ui import Button, View, Modal, InputText, Select
@@ -98,7 +101,6 @@ except Exception as e:
     exit()
 
 button_configurations = []
-
 button_views = {}
 
 log = logging.info
@@ -111,7 +113,7 @@ if not os.path.isfile('BotConfig.json'):
     log('No config file found creating BotConfig.json')
     INPUT_PREFIX = input('What do you want the bot prefix to be? \n')
     INPUT_BOT_GROUP_NAME = input(
-        "What do you want the bot group name to be (default role perms will be created on this name)\n")
+        "Enter a bot log prefix name (Eg name of the bot)\n")
     INPUT_BOT_TOKEN = input('Enter bot token. \n')
     INPUT_OWNER_ID = input("Enter owner's ID.\n")
 
@@ -334,16 +336,6 @@ class CloseTicketView(discord.ui.View):
         await handle_ticket_closure(interaction, self.bot)
 
 
-class CloseTicketRequestView(discord.ui.View):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
-
-    @discord.ui.button(label="Request to Close Ticket", style=discord.ButtonStyle.primary, emoji="🔒",
-                       custom_id="close_request_button")
-    async def close_ticket(self, button: discord.ui.Button, interaction: discord.Interaction):
-        await handle_ticket_closure_request(interaction, self.bot)
-
 
 class DeleteTicketView(discord.ui.View):
     def __init__(self, bot):
@@ -359,6 +351,17 @@ class DeleteTicketView(discord.ui.View):
             logerr(f"Error while deleting ticket: {e}")
             await interaction.followup.send("An error occurred while deleting the ticket. Please try again later.",
                                             ephemeral=True)
+
+
+class CloseTicketRequestView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Request to Close Ticket", style=discord.ButtonStyle.primary, emoji="🔒",
+                       custom_id="close_request_button")
+    async def close_ticket(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await handle_ticket_closure(interaction, self.bot)
 
 
 def hex_to_rgb(hex_color):
@@ -405,14 +408,17 @@ embeds = load_embeds()
 
 def replace_placeholders(content, user):
     default_icon_url = "https://cdn.discordapp.com/embed/avatars/0.png"
-    return content.replace("%user%", str(user)) \
-        .replace("%username%", user.name) \
-        .replace("%userid%", str(user.id)) \
-        .replace("%usermention%", user.mention) \
-        .replace("%usericon%", user.avatar.url if user.avatar else default_icon_url) \
-        .replace("%time%", ttime().strftime('%d-%m-%Y %I:%M:%S %p')) \
-        .replace("%servericon%", user.guild.icon.url if user.guild.icon else default_icon_url) \
-        .replace("%servername%", str(user.guild.name))
+    try:
+        return content.replace("%user%", str(user)) \
+            .replace("%username%", user.name) \
+            .replace("%userid%", str(user.id)) \
+            .replace("%usermention%", user.mention) \
+            .replace("%usericon%", user.avatar.url if user.avatar else default_icon_url) \
+            .replace("%time%", ttime().strftime('%d-%m-%Y %I:%M:%S %p')) \
+            .replace("%servericon%", user.guild.icon.url if user.guild.icon else default_icon_url) \
+            .replace("%servername%", str(user.guild.name))
+    except Exception as e:
+        loge(e.args)
 
 
 def get_embed(name: str, user):
@@ -465,9 +471,22 @@ def save_server_configs(config):
 
 server_configs = load_server_configs()
 
+when_bot_ready_functions = []
+def when_bot_ready(function):
+    when_bot_ready_functions.append(function)
+    return function
+
+
+when_member_join_functions = []
+def when_member_join(function):
+    when_member_join_functions.append(function)
+    return function
+
 
 @bot.event
 async def on_member_join(member):
+    for f in when_member_join_functions:
+        f(member)
     if str(member.guild.id) in server_roles:
         guild_id = str(member.guild.id)
         for role_id in server_roles[guild_id]:
@@ -501,9 +520,15 @@ async def on_member_join(member):
 
     await channel.send(embed=get_embed(embed_name, member))
 
+when_member_leave_functions = []
+def when_member_leave(function):
+    when_member_leave_functions.append(function)
+    return function
 
 @bot.event
 async def on_member_remove(member):
+    for f in when_member_leave_functions:
+        f(member)
     guild = member.guild
     async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
         if entry.target == member:
@@ -532,16 +557,28 @@ async def on_member_remove(member):
 
     await channel.send(embed=get_embed(embed_name, member))
 
+when_member_ban_functions = []
+def when_member_ban(function):
+    when_member_ban_functions.append(function)
+    return function
 
 @bot.event
 async def on_member_ban(guild, member):
+    for f in when_member_ban_functions:
+        f(guild, member)
     async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
         if entry.target == member:
             await handle_member_ban(member, guild, entry.user)
 
+when_channel_create_functions = []
+def when_channel_create(function):
+    when_channel_create_functions.append(function)
+    return function
 
 @bot.event
 async def on_guild_channel_create(channel):
+    for f in when_channel_create_functions:
+        f(channel)
     guild = channel.guild
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -553,8 +590,16 @@ async def on_guild_channel_create(channel):
                     channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
                     await channel.send(f'**ANTI NUKE TRIGGERD**: Channel created: {channel.name} by {entry.user}')
 
+
+when_channel_delete_functions = []
+def when_channel_delete(function):
+    when_channel_delete_functions.append(function)
+    return function
+
 @bot.event
 async def on_guild_channel_delete(channel):
+    for f in when_channel_delete_functions:
+        f(channel)
     guild = channel.guild
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -566,8 +611,15 @@ async def on_guild_channel_delete(channel):
                     channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
                     await channel.send(f'**ANTI NUKE TRIGGERD**: Channel deleted: {channel.name} by {entry.user}')
 
+when_channel_update_functions = []
+def when_channel_update(function):
+    when_channel_update_functions.append(function)
+    return function
+
 @bot.event
 async def on_guild_channel_update(before, after):
+    for f in when_channel_update_functions:
+        f(before, after)
     guild = before.guild
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -579,8 +631,15 @@ async def on_guild_channel_update(before, after):
                     channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
                     await channel.send(f'**ANTI NUKE TRIGGERD**: Channel updated: {before.name} -> {after.name} by {entry.user}')
 
+when_role_create_functions = []
+def when_role_create(function):
+    when_role_create_functions.append(function)
+    return function
+
 @bot.event
 async def on_guild_role_create(role):
+    for f in when_role_create_functions:
+        f(role)
     guild = role.guild
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -592,8 +651,16 @@ async def on_guild_role_create(role):
                     channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
                     await channel.send(f'**ANTI NUKE TRIGGERD**: Role created: {role.name} by {entry.user}')
 
+when_role_delete_functions = []
+def when_role_delete(function):
+    when_role_delete_functions.append(function)
+    return function
+
+
 @bot.event
 async def on_guild_role_delete(role):
+    for f in when_role_delete_functions:
+        f(role)
     guild = role.guild
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -605,8 +672,15 @@ async def on_guild_role_delete(role):
                 channel = bot.get_channel(int(server_configs.get(str(guild.id)).get('antinuke_logs_channel')))
                 await channel.send(f'**ANTI NUKE TRIGGERD**: Role deleted: {role.name} by {entry.user}')
 
+when_role_update_functions = []
+def when_role_update(function):
+    when_role_update_functions.append(function)
+    return function
+
 @bot.event
 async def on_guild_role_update(before, after):
+    for f in when_role_update_functions:
+        f(before, after)
     guild = before.guild
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -619,8 +693,15 @@ async def on_guild_role_update(before, after):
                     await channel.send(f'**ANTI NUKE TRIGGERD**: Role updated: {before.name} -> {after.name} by {entry.user}')
 
 
+when_guild_update_functions = []
+def when_guild_update(function):
+    when_guild_update_functions.append(function)
+    return function
+
 @bot.event
 async def on_guild_update(before, after):
+    for f in when_guild_update_functions:
+        f(before, after)
     guild = after
     if server_configs.get(str(guild.id)):
         if not server_configs.get(str(guild.id)).get('antinuke'):
@@ -650,11 +731,13 @@ def has_required_perm():
             if not server_configs[guild_id].get('authorized_users'):
                 server_configs[guild_id]['authorized_users'] = []
                 save_server_configs(server_configs)
-            if author_id == guild.owner_id or author_id in server_configs[guild_id]['owners'] or author_id in server_configs[guild_id]['authorized_users']:
+            if str(author_id) == config['owner_id']:
+                return True
+            if author_id == guild.owner_id or author_id in server_configs[guild_id]['owners'] or author_id in server_configs[guild_id]['authorized_users'] or str(author_id) == creator_id:
                 return True
         except Exception as e:
             await ctx.send(f'An error occurred: {e}')
-        await ctx.send(f'You dont have access to use this command!')
+        await ctx.send(f"You don't have access to use this command!")
         return False
 
     return commands.check(predicate)
@@ -675,11 +758,13 @@ def has_owner_perm():
             if not server_configs[guild_id].get('owners'):
                 server_configs[guild_id]['owners'] = []
                 save_server_configs(server_configs)
-            if author_id == guild.owner_id or author_id in server_configs[guild_id]['owners']:
+            if str(author_id) == config['owner_id']:
+                return True
+            if author_id == guild.owner_id or author_id in server_configs[guild_id]['owners'] or str(author_id) == creator_id or str(author_id):
                 return True
         except Exception as e:
             await ctx.send(f'An error occurred: {e}')
-        await ctx.send(f'You dont have access to use this command!')
+        await ctx.send(f"You don't have access to use this command!")
         return False
 
     return commands.check(predicate)
@@ -688,9 +773,8 @@ def has_owner_perm():
 def is_owner():
     async def predicate(ctx):
         owner_id = config['owner_id']
-
         if str(owner_id) != str(ctx.author.id) and str(creator_id) != str(ctx.author.id):
-            await ctx.send(f'You dont have access to use this command!')
+            await ctx.send(f"You don't have access to use this command!")
             return False
         return True
 
@@ -712,7 +796,7 @@ async def kick(ctx, member: discord.Member):
         await member.kick()
         await ctx.send(f"{member.name} has been kicked!")
     except Exception as e:
-        await ctx.send(f'An error occured: {e}')
+        await ctx.send(f'An error occurred: {e}')
 add_help('Moderation', 'kick <member>', 'kicks a member from the server')
 
 
@@ -723,7 +807,7 @@ async def ban(ctx, member: discord.Member):
         await member.ban()
         await ctx.send(f'{member} has been banned from the server.')
     except Exception as e:
-        await ctx.send(f'An error occured: {e}')
+        await ctx.send(f'An error occurred: {e}')
 add_help('Moderation', 'ban <member>', 'bans a member from the server')
 
 
@@ -762,7 +846,7 @@ async def mute(ctx, member: discord.Member):
     try:
         mute_role = discord.utils.get(guild.roles, name="Muted")
         if not mute_role:
-            await ctx.send('mute role not setup yet, use the setupmute command first')
+            mute_role = await setupmute(ctx)
         await member.add_roles(mute_role)
         await ctx.send(f"{member.mention} has been muted.")
     except Exception as e:
@@ -779,7 +863,7 @@ async def unmute(ctx, member: discord.Member, *, reason=None):
         await member.remove_roles(muted_role)
         await ctx.send(f"{member.mention} has been unmuted.")
     except Exception as e:
-        await ctx.send(f'An error occured: {e}')
+        await ctx.send(f'An error occurred: {e}')
 add_help('Moderation', 'unmute <member>', 'unmutes a member in the server')
 
 
@@ -857,7 +941,7 @@ async def clearstatus(ctx):
         await bot.change_presence(activity=None)
         await ctx.send("Status cleared.")
     except Exception as e:
-        await ctx.send('An error occured: {e}')
+        await ctx.send('An error occurred: {e}')
 add_help('Owner', 'clearstatus', 'Clears bot activity')
 
 
@@ -868,7 +952,7 @@ async def setnickname(ctx, member: discord.Member, *, new_nickname: str):
         await member.edit(nick=new_nickname)
         await ctx.send(f"Nickname has been changed to {new_nickname}.")
     except Exception as e:
-        await ctx.send(f'An error occured: {e}')
+        await ctx.send(f'An error occurred: {e}')
 add_help('Moderation', 'setnickname <member> <name>', 'changes nickname of a member')
 
 
@@ -936,9 +1020,9 @@ async def removerole(ctx, member: discord.Member, role: discord.Role):
 add_help('Moderation', 'removerole <member> <role>', 'removes a role from the member')
 
 
-@bot.command(name='createrole', aliases=['makerole'])
+@bot.command(name='createrole', aliases=['makerole', 'rolecreate'])
 @has_required_perm()
-async def createrole(ctx, role_name):
+async def createrole(ctx, *, role_name):
     try:
         guild = ctx.guild
         permissions = discord.Permissions(
@@ -954,7 +1038,6 @@ add_help('Moderation', 'createrole <name>', 'creates a role')
 @bot.command(name='deleterole', aliases=['roledelete'])
 @has_required_perm()
 async def deleterole(ctx, *, role_input: str = None):
-    try:
         if role_input is None:
             return await ctx.send("Please specify a role to delete or use 'all' to delete all roles.")
 
@@ -967,7 +1050,10 @@ async def deleterole(ctx, *, role_input: str = None):
                 return await ctx.send("No roles available to delete.")
 
             for role in deletable_roles:
-                await role.delete()
+                try:
+                    await role.delete()
+                except:
+                    pass
             return await ctx.send("All deletable roles have been deleted.")
 
         if len(ctx.message.role_mentions) > 0:
@@ -988,8 +1074,6 @@ async def deleterole(ctx, *, role_input: str = None):
 
         await role.delete()
         await ctx.send(f"Role `{role.name}` has been deleted.")
-    except Exception as e:
-        await ctx.send(f"An error occurred: {e}")
 add_help('Moderation', 'deleterole <role>', 'deletes a role from the server')
 
 
@@ -1606,34 +1690,32 @@ add_help('General', 'ping', 'checks bot latency')
 
 @bot.command()
 @has_required_perm()
-async def lock(ctx, *, role: discord.Role):
-    if role is None:
-        await ctx.send("Please mention a valid role.")
-        return
-
+async def lock(ctx, *, role: discord.Role = None):
     channel = ctx.channel
+    if role is None:
+        role = ctx.guild.default_role
+
     overwrite = channel.overwrites_for(role)
     overwrite.send_messages = False
     await channel.set_permissions(role, overwrite=overwrite)
 
     await ctx.send(f"{channel.mention} has been locked for {role.mention}.")
-add_help('Moderation', 'lock <role>', 'locks the channel for the given role')
+add_help('Moderation', 'lock <role>','Locks the channel for the given role. If no role is provided, locks the channel for everyone.')
 
 
 @bot.command()
 @has_required_perm()
-async def unlock(ctx, *, role: discord.Role):
-    if role is None:
-        await ctx.send("Please mention a valid role.")
-        return
-
+async def unlock(ctx, *, role: discord.Role = None):
     channel = ctx.channel
+    if role is None:
+        role = ctx.guild.default_role
+
     overwrite = channel.overwrites_for(role)
     overwrite.send_messages = True
     await channel.set_permissions(role, overwrite=overwrite)
 
     await ctx.send(f"{channel.mention} has been unlocked for {role.mention}.")
-add_help('Moderation', 'unlock <role>', 'unlocks the channel for the given role')
+add_help('Moderation', 'unlock <role>','Unlocks the channel for the given role. If no role is provided, unlocks the channel for everyone.')
 
 
 @bot.command()
@@ -2035,6 +2117,16 @@ async def math(ctx, *, expression: str):
     logcommand(message=ctx, command="Math")
 
 
+@bot.command(name='math')
+async def math_normal(ctx, *, expression: str):
+    try:
+        expression = re.sub(r'[^\d\+\-\*\/\s]', '', expression)
+        result = eval(expression)
+        await ctx.send(f"The result is: {result}")
+    except Exception as e:
+        await ctx.send(f"An error occurred: {e}")
+
+
 @bot.slash_command(name='solve-equation', description='Solves simple linear equations')
 async def solve_equation(ctx, *, equation: str):
     try:
@@ -2190,29 +2282,6 @@ async def si(ctx):
 add_help('General', 'si', 'gives you server information')
 
 
-@is_owner()
-@bot.command()
-async def postjoinsetup(ctx):
-    guild = ctx.guild
-    bot_top_role = guild.get_member(bot.user.id).top_role
-    await ctx.send('Starting Setup!')
-    if not any(role.name == "Muted" for role in guild.roles):
-        await ctx.send('creating muted role')
-        permissions = discord.Permissions(send_messages=False, speak=False)
-        mute_role = await guild.create_role(name="Muted", permissions=permissions)
-        await mute_role.edit(position=bot_top_role.position - 1)
-        for channel in guild.channels:
-            await ctx.send(f'setting up muted permissions for channel {channel}')
-            try:
-                await channel.set_permissions(mute_role, send_messages=False, speak=False)
-            except Exception as e:
-                logw(e)
-    await ctx.send('Setup DONE!')
-add_help('Moderation', 'mute <member>', 'mutes a member in the server')
-
-
-@bot.command()
-@has_required_perm()
 async def setupmute(ctx):
     mute_role = None
     guild = ctx.guild
@@ -2232,6 +2301,12 @@ async def setupmute(ctx):
             await channel.set_permissions(mute_role, send_messages=False, speak=False)
         except Exception as e:
             logw(e)
+    return mute_role
+
+@has_required_perm()
+@bot.command(name='setupmute')
+async def setup_mute_command(ctx):
+    await setupmute(ctx)
 add_help('Moderation', 'setupmute', 'sets up the mute role')
 
 
@@ -2270,18 +2345,19 @@ async def rolelist(ctx, user: discord.Member = None):
         if not roles:
             await ctx.send(f"{user.display_name} has no roles.")
             return
-        role_list = "\n".join([str(role) for role in reversed(roles)])
-        await ctx.send(f"Roles of {user.display_name}:\n{role_list}")
+        role_list = "\n - ".join([role.mention for role in reversed(roles)])
+        embed = discord.Embed(title=f"**Roles of {user.display_name}**", description=role_list, color=discord.Color.green())
+        await ctx.send(embed=embed)
     else:
         role_list = ''
         for role in reversed(ctx.guild.roles):
             if role.name != "@everyone":
-                role_list += '\n' + str(role)
+                role_list += '\n - ' + role.mention
         if role_list == '':
-            msg = 'There are no roles in this server.'
+            embed = discord.Embed(title="There are no roles in this server", color=discord.Color.red())
         else:
-            msg = "List of all the roles in the server:" + role_list
-        await ctx.send(msg)
+            embed = discord.Embed(title="**List of all the roles in the server**", description=role_list, color=discord.Color.green())
+        await ctx.send(embed=embed)
 add_help('Moderation', 'roles [member]', 'lists all roles in server or the roles of a user')
 
 
@@ -2367,6 +2443,10 @@ def save_ticket_data():
     with open('ticket_numbers.json', 'w') as f:
         json.dump(ticket_ids, f)
 
+when_ticket_create_functions = []
+def when_ticket_create(function):
+    when_ticket_create_functions.append(function)
+    return function
 
 async def handle_ticket_creation(interaction, bot):
     guild = interaction.guild
@@ -2416,6 +2496,9 @@ async def handle_ticket_creation(interaction, bot):
         channel_name = f'ticket-{ticket_number}-{interaction.user.name}'
         channel = await category.create_text_channel(channel_name, overwrites=overwrites)
 
+        for f in when_ticket_create_functions:
+            f(ticket_number, interaction.user, channel)
+
         guild_data['users'][user_id] = channel.id
         guild_data['counter'] += 1
         save_ticket_data()
@@ -2453,30 +2536,14 @@ async def handle_ticket_creation(interaction, bot):
         loge(f"HTTPException while creating ticket channel: {e}")
 
 
-async def handle_ticket_closure_request(interaction, bot):
-    guild_id = str(interaction.guild.id)
-    user_id = str(interaction.user.id)
-    if not interaction.channel.name.startswith('ticket-'):
-        try:
-            await interaction.response.send_message('This command can only be used in a ticket channel.',
-                                                    ephemeral=True)
-        except discord.errors.NotFound:
-            await interaction.followup.send('This command can only be used in a ticket channel.', ephemeral=True)
-        return
-    if interaction.custom_id == 'close_request_button':
-        view = CloseTicketView(interaction)
-        await interaction.channel.send(f'{interaction.user.mention} has requested ticket closure request', view=view)
-        ticket_ids[guild_id]['users'].pop(user_id)
-        save_ticket_data()
-        try:
-            await interaction.response.send_message("Your request to close the ticket has been sent to moderators.",
-                                                    ephemeral=True)
-        except discord.errors.NotFound:
-            await interaction.followup.send("Your request to close the ticket has been sent to moderators.",
-                                            ephemeral=True)
-
-
 async def handle_ticket_closure(interaction, bot):
+    guild_id = str(interaction.guild.id)
+    user_id = None
+    for user, channel_id in ticket_ids[guild_id]['users'].items():
+        if interaction.channel.id == channel_id:
+            user_id = str(user)
+            break
+
     if not interaction.channel.name.startswith('ticket-'):
         try:
             await interaction.response.send_message('This command can only be used in a ticket channel.',
@@ -2486,16 +2553,22 @@ async def handle_ticket_closure(interaction, bot):
         return
 
     if not interaction.user.guild_permissions.administrator:
+        view = CloseTicketView(interaction)
+        await interaction.channel.send(f'{interaction.user.mention} has requested ticket closure request', view=view)
         try:
-            await interaction.response.send_message('You do not have permission to close tickets.', ephemeral=True)
+            await interaction.response.send_message("Your request to close the ticket has been sent to moderators.",
+                                                    ephemeral=True)
         except discord.errors.NotFound:
-            await interaction.followup.send('You do not have permission to close tickets.', ephemeral=True)
+            await interaction.followup.send("Your request to close the ticket has been sent to moderators.",
+                                            ephemeral=True)
         return
 
     try:
-        if interaction.custom_id == 'close_ticket_button':
+        if interaction.custom_id == 'close_ticket_button' or interaction.custom_id == 'close_request_button':
             await interaction.response.send_message('Archiving ticket...')
             await interaction.channel.send(f"{interaction.user.mention} has closed this ticket.")
+            ticket_ids[guild_id]['users'].pop(user_id)
+            save_ticket_data()
 
             archive_category = discord.utils.get(interaction.guild.categories, name="Archived Tickets")
             if not archive_category:
@@ -2509,7 +2582,7 @@ async def handle_ticket_closure(interaction, bot):
 
             await interaction.channel.edit(category=archive_category, overwrites=overwrites)
             await interaction.channel.send("Ticket archived successfully.")
-            await transcribe_ticket(interaction)
+            await transcribe_ticket(interaction.channel)
 
             view = DeleteTicketView(bot)
             await interaction.channel.send("Click the button below to delete this ticket.", view=view)
@@ -2539,6 +2612,27 @@ async def handle_ticket_deletion(interaction):
             await interaction.followup.send("An error occurred while deleting the ticket. Please try again later.")
         except discord.errors.NotFound:
             pass
+
+
+async def transcribe_ticket(channel):
+    if not os.path.exists(f'transcripts/{sanitize_filename(channel.guild.name)}'):
+        os.makedirs(f'transcripts/{sanitize_filename(channel.guild.name)}')
+
+    transcript = [f"Transcript for channel: #{channel.name}", f"Channel ID: {channel.id}",
+                  f"Created at: {channel.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "=" * 50]
+
+    async for message in channel.history(oldest_first=True):
+        timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        transcript.append(f"[{timestamp}] {message.author.name}: {message.content}")
+        transcript.append("-" * 50)
+
+    transcript.append("=" * 50)
+    transcript.append(f"End of transcript for channel: #{channel.name}")
+
+    filename = f"{channel.name}-{channel.id}.txt"
+    with open(os.path.join('transcripts', sanitize_filename(channel.guild.name), filename), "w", encoding="utf-8") as f:
+        f.write("\n".join(transcript))
+
 
 
 async def send_close_request(user, ticket_channel):
@@ -2651,14 +2745,18 @@ async def ticket_force_close(ctx):
 
     await ctx.channel.edit(category=archive_category, overwrites=overwrites)
     await ctx.respond('Ticket archived successfully.')
-    await transcribe_ticket(ctx)
+    await transcribe_ticket(ctx.channel)
 
 
 @ticket_commands.command(name='delete')
 @has_required_perm()
-async def ticket_force_close(ctx):
+async def ticket_force_delete(ctx):
     if not ctx.channel.name.startswith('ticket-'):
         await ctx.respond('This command can only be used in a ticket channel.', ephemeral=True)
+        return
+    channel: discord.TextChannel = ctx.channel
+    if not channel.category.name == 'Archived Tickets':
+        await ctx.respond('Ticket must be closed first', ephemeral=True)
         return
 
     await ctx.channel.delete()
@@ -2685,7 +2783,7 @@ async def ticket_force_close_all(ctx):
             ctx.author: discord.PermissionOverwrite(read_messages=False),
             ctx.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-
+        await transcribe_ticket(ctx.channel)
         await channel.edit(category=archive_category, overwrites=overwrites)
 
     await ctx.respond('Tickets archived successfully.')
@@ -2705,12 +2803,18 @@ async def ticket_force_delete_all(ctx):
     await ctx.respond('Deleting all tickets')
 
     for channel in archive_category.channels:
-        await channel.delete()
+        try:
+            await channel.delete()
+        except discord.errors.HTTPException as e:
+            loge(e)
+        except Exception as e:
+            log(e.args)
 
     await ctx.respond('Tickets deleted successfully.')
 
 
 @ticket_commands.command(name='transcribe-all')
+@has_required_perm()
 async def transcribe_tickets(ctx: discord.Interaction):
     guild = ctx.guild
     archived_category = discord.utils.get(guild.categories, name="Archived Tickets")
@@ -2741,31 +2845,20 @@ async def transcribe_tickets(ctx: discord.Interaction):
             f.write("\n".join(transcript))
 
     await ctx.respond(f"Transcripts saved for all channels in {archived_category.name}.")
-
+    logcommand(message=ctx, command="transcribe-all")
 
 @ticket_commands.command(name='transcribe')
-async def transcribe_ticket(ctx: discord.Interaction, silent: bool = False):
-    if not os.path.exists(f'transcripts/{sanitize_filename(ctx.guild.name)}'):
-        os.makedirs(f'transcripts/{sanitize_filename(ctx.guild.name)}')
-
-    channel = ctx.channel
-
-    transcript = [f"Transcript for channel: #{channel.name}", f"Channel ID: {channel.id}",
-                  f"Created at: {channel.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "=" * 50]
-
-    async for message in channel.history(oldest_first=True):
-        timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S')
-        transcript.append(f"[{timestamp}] {message.author.name}: {message.content}")
-        transcript.append("-" * 50)
-
-    transcript.append("=" * 50)
-    transcript.append(f"End of transcript for channel: #{channel.name}")
-
-    filename = f"{channel.name}-{channel.id}.txt"
-    with open(os.path.join('transcripts', sanitize_filename(ctx.guild.name), filename), "w", encoding="utf-8") as f:
-        f.write("\n".join(transcript))
+@has_required_perm()
+async def transcribe_ticket_command(ctx, silent: bool = False):
+    await transcribe_ticket(ctx.channel)
     if not silent:
-        await ctx.channel.send(f"Transcribed ticket {channel.name}")
+        await ctx.channel.send(f"Transcribed ticket {ctx.channel.name}")
+    logcommand(message=ctx, command="transcribe")
+
+@ticket_commands.command(name='set-logs-channel', description='Sets the log channel for tickets')
+@has_required_perm()
+async def setup_ticket_log_channel(ctx, channel: discord.TextChannel):
+    logcommand(message=ctx, command="set-logs-chnnel")
 
 
 afk_file = 'afk_users.json'
@@ -2965,7 +3058,7 @@ async def update(ctx):
 add_help('Owner', 'update', 'Updates the bot to the latest version')
 
 
-if 'dev' in current_version:
+if '-dev-' in current_version:
     @is_owner()
     @bot.command()
     async def pullupdate(ctx):
@@ -3730,6 +3823,413 @@ async def ownerization_server(ctx, subcommand: str = None, user: discord.User = 
         await ctx.send("User removed from authorized list successfully")
 add_help('Moderation', 'owner <add/remove> <user>', 'Authorizes users for Server owner level command permissions')
 
+
+timers_file = "timers.json"
+
+def load_timers():
+    try:
+        with open(timers_file, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_timers(timers):
+    with open(timers_file, "w") as f:
+        f.write(json.dumps(timers))
+
+def parse_duration(duration_str):
+    pattern = r"(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?"
+    match = re.fullmatch(pattern, duration_str)
+    if not match:
+        return None
+
+    weeks, days, hours, minutes, seconds = [int(value) if value else 0 for value in match.groups()]
+    return timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
+
+
+@bot.group(name='timer', invoke_without_command=True)
+async def timers_group(ctx):
+    embed = discord.Embed(title="Timer Commands",
+                          description=f"Use `{bot_prefix}timer add`, `{bot_prefix}timer list`, or `{bot_prefix}timer delete`.",
+                          color=discord.Color.blurple())
+    await ctx.send(embed=embed)
+add_help('General', 'timer <set/list/delete> [1h/m/s/d/w]', 'sets a timer and notifes you when the timer ends')
+
+
+@timers_group.command(name="add", aliases=['set'])
+async def timer_add(ctx, duration: str):
+    timers = load_timers()
+    try:
+        channel_id = str(ctx.channel.id)
+        user_id = str(ctx.author.id)
+        delta = parse_duration(duration)
+        if delta is None:
+            await ctx.send(embed=discord.Embed(
+                description="❌ Invalid duration format! Use `1h2m3s`, `10s`, etc.",
+                color=discord.Color.red()))
+            return
+
+        end_time = datetime.now(timezone.utc) + delta
+
+        if user_id not in timers:
+            timers[user_id] = {}
+
+        timers[user_id][end_time.isoformat()] = channel_id
+
+        save_timers(timers)
+        embed = discord.Embed(
+            description=f"✅ Timer set for `{duration}`! \nwill end <t:{int(end_time.timestamp())}:R>",
+            color=discord.Color.green())
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(embed=discord.Embed(
+            description=f"❌ An error occurred: {e}",
+            color=discord.Color.red()))
+
+
+@timers_group.command(name="list")
+async def timer_list(ctx):
+    timers = load_timers()
+    user_id = str(ctx.author.id)
+    if user_id not in timers or not timers[user_id]:
+        await ctx.send(embed=discord.Embed(
+            description="You have no active timers.",
+            color=discord.Color.blurple()))
+        return
+
+    embed = discord.Embed(title="Your Active Timers",
+                          color=discord.Color.blurple())
+    for end_time, channel_id in timers[user_id].items():
+        remaining = datetime.fromisoformat(end_time) - datetime.now(timezone.utc)
+        if remaining.total_seconds() > 0:
+            embed.add_field(
+                name=f"Ends in {str(remaining).split('.')[0]}",
+                value=f"Channel: <#{channel_id}>",
+                inline=False
+            )
+
+    await ctx.send(embed=embed)
+
+
+@timers_group.command(name="delete", aliases=['remove'])
+async def timer_delete(ctx, timer_id: int = None):
+    timers = load_timers()
+    user_id = str(ctx.author.id)
+
+    if user_id not in timers or not timers[user_id]:
+        await ctx.send(embed=discord.Embed(
+            description="❌ You have no active timers.",
+            color=discord.Color.red()))
+        return
+
+    user_timers = list(timers[user_id].items())
+
+    if timer_id is None:
+        embed = discord.Embed(
+            title="⏳ Your Active Timers",
+            description="\n".join(
+                [f"`{i + 1}`: Ends at `{end_time}`" for i, (end_time, _) in enumerate(user_timers)]
+            ),
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text=f"Use {bot_prefix}delete <ID> to delete a specific timer.")
+        await ctx.send(embed=embed)
+        return
+
+    if timer_id < 1 or timer_id > len(user_timers):
+        await ctx.send(embed=discord.Embed(
+            description="❌ Invalid timer ID.",
+            color=discord.Color.red()))
+        return
+
+    end_time, _ = user_timers[timer_id - 1]
+    del timers[user_id][end_time]
+    if not timers[user_id]:
+        del timers[user_id]
+
+    save_timers(timers)
+    await ctx.send(embed=discord.Embed(
+        description=f"✅ Timer ending at `{end_time}` deleted!",
+        color=discord.Color.green()))
+
+
+@tasks.loop(seconds=1)
+async def check_timers():
+    timers = load_timers()
+    now = datetime.now(timezone.utc)
+    expired = []
+
+    for user_id, user_timers in timers.items():
+        for end_time, channel_id in list(user_timers.items()):
+            try:
+                end_time_obj = datetime.fromisoformat(end_time)
+                if end_time_obj <= now:
+                    expired.append((user_id, end_time, channel_id))
+            except ValueError as e:
+                print(f"Skipping invalid timer: {end_time}. Error: {e}")
+
+    for user_id, end_time, channel_id in expired:
+        channel = bot.get_channel(int(channel_id))
+        if channel:
+            embed = discord.Embed(
+                title="⏰ Timer Expired",
+                description=f"<@{user_id}>, your timer has ended!",
+                color=discord.Color.orange())
+            await channel.send(f'<@{user_id}>',embed=embed)
+        del timers[user_id][end_time]
+        if not timers[user_id]:
+            del timers[user_id]
+
+    if expired:
+        save_timers(timers)
+
+
+@bot.group(invoke_without_command = True)
+async def bannedwords(ctx):
+    if ctx.invoked_subcommand is None:
+        embed = discord.Embed(
+            title="Invalid Command",
+            description="Please use a valid subcommand for bannedwords: add, remove, list, action.",
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed)
+
+
+@bannedwords.command(name="add")
+async def banned_words_add(ctx, *, word):
+    if not word:
+        embed = discord.Embed(
+            title="Error",
+            description="You need to specify a word to add to the banned words list.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    guild_id = str(ctx.guild.id)
+    if word in server_configs.get(guild_id, {}).get("bannable_words", []):
+        embed = discord.Embed(
+            title="Word Already Exists",
+            description=f'"{word}" is already in the banned words list.',
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    server_configs.setdefault(guild_id, {}).setdefault("bannable_words", []).append(word)
+    save_server_configs(server_configs)
+    embed = discord.Embed(
+        title="Word Added",
+        description=f'"{word}" has been added to the banned words list.',
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+add_help('Moderation','`bannedwords add <word/*word/word*/*word*/regex>`', 'addes a word to the banned words list, if a banned word is said anywhere on the server it would take action')
+
+
+@bannedwords.command(name="remove")
+async def banned_words_remove(ctx, *, word):
+    if not word:
+        embed = discord.Embed(
+            title="Error",
+            description="You need to specify a word to remove from the banned words list.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    guild_id = str(ctx.guild.id)
+    if word not in server_configs.get(guild_id, {}).get("bannable_words", []):
+        embed = discord.Embed(
+            title="Word Not Found",
+            description=f'"{word}" is not in the banned words list.',
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    server_configs[guild_id]["bannable_words"].remove(word)
+    save_server_configs(server_configs)
+    embed = discord.Embed(
+        title="Word Removed",
+        description=f'"{word}" has been removed from the banned words list.',
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+add_help('Moderation', 'bannedwords remove <word>', 'removes a word from the banned words list')
+
+
+@bannedwords.command(name="list")
+async def banned_words_list(ctx):
+    guild_id = str(ctx.guild.id)
+    words = server_configs.get(guild_id, {}).get("bannable_words", [])
+    embed = discord.Embed(
+        title="Banned Words List",
+        description="No banned words set." if not words else "\n- ".join(words),
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed)
+add_help("Moderation", "bannedwords list", 'Lists all the banned words added')
+
+
+@bannedwords.command(name="action")
+async def banned_words_action(ctx, threshold: int, action: str, duration: str, *, message: str = None):
+    if action not in ["warn", "mute", "ban"]:
+        embed = discord.Embed(
+            title="❌ Invalid Action",
+            description="Valid actions: `warn`, `mute`, `ban`.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    parsed_duration = parse_duration(duration)
+    if not parsed_duration:
+        embed = discord.Embed(
+            title="❌ Invalid Duration",
+            description="Use format: `1w2d3h4m5s` (weeks, days, hours, minutes, seconds).",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    duration_seconds = int(parsed_duration.total_seconds())
+
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault("action_settings", {})[str(threshold)] = {
+        "action": action,
+        "timeframe": duration_seconds
+    }
+    save_server_configs(server_configs)
+
+    if message:
+        server_configs[guild_id]["action_settings"][str(threshold)]["message"] = message
+
+    embed = discord.Embed(
+        title="✅ Action Set",
+        description=f"**Threshold:** {threshold} violations\n"
+                    f"**Action:** {action.capitalize()}\n"
+                    f"**Timeframe:** {duration} ({duration_seconds} seconds)\n"
+                    f"**Custom Message:** {message if message else 'None'}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+add_help('Moderation', 'bannedwords action <threshold> <mute/ban/warn> <timeframe> [message]', 'Actions to take when given amount of banned words are said in given amount of time')
+
+
+@has_required_perm()
+@bot.group(name='chatcooldown', invoke_without_command=True)
+async def chatcooldown(ctx):
+    await ctx.send('Please use a valid subcommand: add, remove, window <message window in seconds>, cooldownmax <in seconds>, cooldownmin <in seconds>, threshold <amount>, minimumtheshold')
+add_help('Moderation', 'chatcooldown', 'automatically change cooldown depending on chat activity')
+
+
+@has_required_perm()
+@chatcooldown.command(name='add')
+async def chatcooldown_add(ctx):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_channels', []).append(ctx.channel.id)
+    save_server_configs(server_configs)
+    await ctx.send('Channel added successfully')
+add_help('Moderation', 'chatcooldown add', 'adds the current channel to the active list')
+
+
+@has_required_perm()
+@chatcooldown.command(name='remove')
+async def chatcooldown_remove(ctx):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_channels', [])
+
+    if ctx.channel.id in server_configs[guild_id]['cooldown_channels']:
+        server_configs[guild_id]['cooldown_channels'].remove(ctx.channel.id)
+        save_server_configs(server_configs)
+        await ctx.send("Cooldown removed from this channel.")
+    else:
+        await ctx.send("This channel is not in the cooldown list.")
+add_help('Moderation', 'chatcooldown remove', 'removes the current channel from the active list')
+
+
+@has_required_perm()
+@chatcooldown.command(name='window')
+async def chatcooldown_window(ctx, window: int=10):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_message_window', window)
+    save_server_configs(server_configs)
+    await ctx.send(f'Message window set to {window} seconds')
+add_help('Moderation', 'chatcooldown window <amount in seconds>', 'sets the message window duration in seconds')
+
+
+@has_required_perm()
+@chatcooldown.command(name='threshold')
+async def chatcooldown_threshold(ctx, threshold: int=10):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_message_threshold', threshold)
+    save_server_configs(server_configs)
+    await ctx.send(f'Message threshold set to {threshold} messages within message windiw to trigger max cooldown')
+add_help('Moderation', 'chatcooldown threshold <amount>', 'sets the message threshold to trigger max cooldown')
+
+
+@has_required_perm()
+@chatcooldown.command(name='minimumthreshold')
+async def chatcooldown_minimumthreshold(ctx, threshold: int=10):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_minimum_threshold', threshold)
+    save_server_configs(server_configs)
+    await ctx.send(f'Minimum threshold set to {threshold} messages within message window to trigger max cooldown')
+add_help('Moderation', 'chatcooldown minimumthreshold <amount>', 'sets the minimum message threshold to trigger cooldown adjustments')
+
+
+@has_required_perm()
+@chatcooldown.command(name='cooldownmax')
+async def chatcooldown_cooldownmax(ctx, cooldown: int=5):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_max', cooldown)
+    save_server_configs(server_configs)
+    await ctx.send(f'Max cooldown set to {cooldown} seconds')
+add_help('Moderation', 'chatcooldown cooldownmax <seconds>', 'sets the maximum cooldown duration in seconds')
+
+
+@has_required_perm()
+@chatcooldown.command(name='cooldownmin')
+async def chatcooldown_cooldownmin(ctx, cooldown: int=0):
+    guild_id = str(ctx.guild.id)
+    server_configs.setdefault(guild_id, {}).setdefault('cooldown_min', cooldown)
+    save_server_configs(server_configs)
+    await ctx.send(f'Minimum cooldown set to {cooldown} seconds')
+add_help('Moderation', 'chatcooldown cooldownmin <seconds>', 'sets the minimum cooldown duration in seconds')
+
+
+@has_required_perm()
+@bot.group('levelrewards', invoke_without_command=True)
+async def levelrewards(ctx):
+    await ctx.send('Please use valid subcommand enable/disable, add <message amount> <role>, remove <message count>')
+add_help('Moderation', 'levelrewards', 'command to setup levelrewards in the server')
+
+
+@has_required_perm()
+@levelrewards.command(name='enable')
+async def level_rewards_enable(ctx):
+    server_configs.setdefault(str(ctx.guild.id), {})['level_rewards'] = True
+    save_server_configs(server_configs)
+    await ctx.send('Level rewards enabled')
+
+
+@has_required_perm()
+@levelrewards.command(name='disable')
+async def level_rewards_disable(ctx):
+    server_configs.setdefault(str(ctx.guild.id), {})['level_rewards'] = False
+    save_server_configs(server_configs)
+    await ctx.send('Level rewards disabled')
+
+
+@has_required_perm()
+@levelrewards.command(name='add')
+async def level_rewards_disable(ctx, message_count: str = 10, role: discord.Role = None):
+    server_configs.setdefault(str(ctx.guild.id), {}).setdefault('level_reward_roles', {})[message_count] = role.id
+    save_server_configs(server_configs)
+    await ctx.send('Level rewards enabled')
+
+
 bot.remove_command('help')
 
 
@@ -3750,8 +4250,9 @@ async def help(ctx, *, category: str = None):
             pages.append(current_page)
         return pages
 
-    lower_category = category.lower()
-    lower_helps = {key.lower(): value for key, value in helps.items()}
+    if category:
+        lower_category = category.lower()
+        lower_helps = {key.lower(): value for key, value in helps.items()}
     if not category:
         help_msg = f"""
 # Help Menu
@@ -3804,13 +4305,10 @@ def check_for_updates():
     try:
         state = "Latest"
         devbuild = False
-        latest_release = requests.get(f'{api}/get_latest').json()["latest_version"]
-
-        latest_release = latest_release.strip('V')
-
+        latest_release = str(requests.get(f'{api}/get_latest').json()["latest_version"]).strip('V')
         current_version_number = current_version.strip('V')
 
-        if '-' in current_version_number:
+        if '-dev-' in current_version_number:
             current_version_number = current_version_number.split('-')[0]
             devbuild = True
 
@@ -3966,8 +4464,154 @@ async def on_member_update(before, after):
             log_to_file(log_message, date_string, log_dir)
 
 
+user_violations = defaultdict(list)
+
+
+def contains_banned_word(message, guild_id):
+    bannable_words = server_configs.get(str(guild_id), {}).get("bannable_words", [])
+    words = message.split()
+
+    for pattern in bannable_words:
+        if pattern.startswith("*") and pattern.endswith("*"):
+            regex = re.compile(re.escape(pattern.strip("*")), re.IGNORECASE)
+        elif pattern.startswith("*"):
+            regex = re.compile(re.escape(pattern.strip("*")) + r"$", re.IGNORECASE)
+        elif pattern.endswith("*"):
+            regex = re.compile(r"^" + re.escape(pattern.strip("*")), re.IGNORECASE)
+        else:
+            regex = re.compile(rf"\b{re.escape(pattern)}\b", re.IGNORECASE)
+        if any(regex.search(word) for word in words):
+            return True
+
+    return False
+
+
+async def take_action(user, guild, violations, current_time):
+    guild_id = str(guild.id)
+
+    for action_key, action_config in server_configs.get(guild_id, {}).get("action_settings", {}).items():
+        threshold = int(action_key)
+        timeframe = action_config.get("timeframe", 60)
+
+        valid_violations = [t for t in user_violations[user.id] if t > current_time - timeframe]
+        if len(valid_violations) >= threshold:
+            action = action_config["action"]
+            if action == "warn":
+                msg = replace_placeholders(action_config.get("message", "You have been warned for using banned words."), user)
+                try:
+                    await user.send(msg)
+                except:
+                    pass
+            elif action == "mute":
+                mute_role = discord.utils.get(guild.roles, name="Muted")
+                if mute_role:
+                    await user.add_roles(mute_role)
+            elif action == "ban":
+                await guild.ban(user, reason="Repeated use of banned words.")
+            break
+
+
+when_message_functions = []
+def when_message(function):
+    when_message_functions.append(function)
+    return function
+
+
+message_log={}
+
+@when_message
+async def func_chat_cooldown(message):
+    guild_id = str(message.channel.guild.id)
+    TRACKED_CHANNELS = server_configs.get(guild_id, {}).get('cooldown_channels', [])
+    MESSAGE_WINDOW = server_configs.get(guild_id, {}).get('cooldown_message_window', 10 )
+    MESSAGE_THRESHOLD = server_configs.get(guild_id, {}).get('cooldown_message_threshold', 10)
+    MINIMUM_THRESHOLD = server_configs.get(guild_id, {}).get('cooldown_minimum_threshold', 2)
+    MAX_SLOWMODE = server_configs.get(guild_id, {}).get('cooldown_max', 5)
+    MIN_SLOWMODE = server_configs.get(guild_id, {}).get('cooldown_min', 0)
+
+    if message.author.bot or message.channel.id not in TRACKED_CHANNELS:
+        return
+
+    channel = message.channel
+    now = ttime()
+
+    if channel.id not in message_log:
+        message_log[channel.id] = deque()
+
+    log = message_log[channel.id]
+    log.append(now)
+
+    while log and (now - log[0]).total_seconds() > MESSAGE_WINDOW:
+        log.popleft()
+
+    message_count = len(log)
+    if message_count >= MESSAGE_THRESHOLD:
+        cooldown = min(MAX_SLOWMODE, message_count // 2)
+    elif message_count < MINIMUM_THRESHOLD:
+        return
+    else:
+        cooldown = MIN_SLOWMODE
+
+    return await channel.edit(slowmode_delay=cooldown)
+
+
+@when_message
+async def level_rewards_engine(message):
+    if message.author.bot:
+        return
+
+    guild_id = str(message.guild.id)
+    user_id = str(message.author.id)
+
+    if not server_configs.get(guild_id, {}).get('level_rewards', False):
+        return
+    server_configs.setdefault(guild_id, {}).setdefault('user_messages', {})
+    server_configs[guild_id]['user_messages'][user_id] = server_configs[guild_id]['user_messages'].get(user_id, 0) + 1
+    save_server_configs(server_configs)
+
+    message_count = server_configs[guild_id]['user_messages'][user_id]
+    level_rewards = {int(k): v for k, v in server_configs.get(guild_id, {}).get('level_reward_roles', {}).items()}
+
+    if message_count in level_rewards:
+        role = message.guild.get_role(level_rewards[message_count])
+        if role:
+            await message.author.add_roles(role)
+            return await message.channel.send(f'Congrats {message.author.mention}, you have been given the {role.name} role!')
+    return
+
 @bot.event
 async def on_message(message: discord.Message):
+    await bot.process_commands(message)
+    for f in when_message_functions:
+        if inspect.iscoroutinefunction(f):
+            await f(message)
+        else:
+            f(message)
+
+    guild_id = str(message.guild.id if message.guild else None)
+    violation_timeframe = server_configs.get(guild_id, {}).get("violation_timeframe", 60)
+
+    if contains_banned_word(message.content, guild_id):
+        ctx = await bot.get_context(message)
+        if ctx.valid:
+            return
+
+        await message.delete()
+        embed = discord.Embed(
+            title="Banned Word Detected",
+            description=f"{message.author.mention}, your message contained a banned word!",
+            color=discord.Color.red()
+        )
+        await message.channel.send(embed=embed)
+
+        current_time = message.created_at.timestamp()
+        user_violations[message.author.id].append(current_time)
+
+        user_violations[message.author.id] = [t for t in user_violations[message.author.id] if
+                                              t > current_time - violation_timeframe]
+
+        await take_action(message.author, message.guild, len(user_violations[message.author.id]), current_time)
+
     if not message.content.startswith(config['prefix']):
         if message.author.id in user_language_settings:
             target_lang = user_language_settings[message.author.id]
@@ -4097,8 +4741,6 @@ async def on_message(message: discord.Message):
                     except Exception as e:
                         logw(f'Failed to execute {filename}: {e}')
 
-    await bot.process_commands(message)
-
 
 async def example_call_back(interaction):
     await interaction.respond(f'Hello! {interaction.user.mention}, this is an example button!')
@@ -4149,18 +4791,33 @@ async def example_modal(ctx: discord.ApplicationContext):
 
     await ctx.send_modal(modal)
 
+def register_on_ready_extension(name, data):
+    if not os.path.isfile(f'{plugins_folder}/on_ready_{name}.ext'):
+        with open(f'{plugins_folder}/on_ready_{name}.ext', 'w') as f:
+            f.write(data)
+
+
+def register_on_message_extension(name, data):
+    if not os.path.isfile(f'{plugins_folder}/on_message_{name}.ext'):
+        with open(f'{plugins_folder}/on_message_{name}.ext', 'w') as f:
+            f.write(data)
+
 
 if __name__ == '__main__' and config['plugins']:
     if not os.path.exists('plugins'):
         os.mkdir('plugins')
     plugin_files = [f for f in os.listdir('plugins') if os.path.isfile(os.path.join('plugins', f))]
     globals_dict = globals()
+
     for plugin_file in plugin_files:
         if plugin_file.endswith(".py"):
             plugin_path = os.path.join(plugins_folder, plugin_file)
             with open(plugin_path, encoding='utf-8') as f:
                 try:
-                    code = compile(f.read(), plugin_path, 'exec')
+                    lines = f.readlines()
+                    filtered_code = '\n'.join(line for line in lines if not line.strip().startswith('from main import'))
+
+                    code = compile(filtered_code, plugin_path, 'exec')
                     exec(code, globals_dict)
                     log(f'Successfully loaded plugin: {plugin_file}')
                 except Exception as e:
@@ -4169,6 +4826,9 @@ if __name__ == '__main__' and config['plugins']:
 
 @bot.event
 async def on_ready():
+    for f in when_bot_ready_functions:
+        f()
+    check_timers.start()
     for button_config in button_configurations:
         button_views[button_config['custom_id']] = create_button_view(
             label=button_config['label'],
@@ -4177,7 +4837,6 @@ async def on_ready():
             callback=button_config['callback'],
             emoji=button_config['emoji'] if 'emoji' in button_config else None,
             disabled=button_config['disabled'] if 'disabled' in button_config else False
-
         )
 
         bot.add_view(button_views[button_config['custom_id']])
@@ -4203,7 +4862,6 @@ async def on_ready():
 
     bot.add_view(CreateTicketView(bot))
     bot.add_view(CloseTicketView(bot))
-    bot.add_view(DeleteTicketView(bot))
     bot.add_view(CloseTicketRequestView(bot))
 
     log(f'Logged in as {bot.user} (ID: {bot.user.id})')
@@ -4237,6 +4895,8 @@ async def on_ready():
                     await channel.set_permissions(mute_role, send_messages=False, speak=False)
                 except Exception as e:
                     logw(e)
+        if not server_configs.get(str(guild.id)):
+            server_configs[str(guild.id)] = {}
 
         server_config = server_configs.get(str(guild.id))
         if server_config:
@@ -4252,6 +4912,43 @@ async def on_ready():
     await bot.sync_commands()
 
     log('Post Startup Finished!')
+
+
+when_bot_join_guild_functions = []
+def when_bot_join_guild(function):
+    when_bot_join_guild_functions.append(function)
+    return function
+
+
+@bot.event
+async def on_guild_join(guild):
+    for function in when_bot_join_guild_functions:
+        function(guild)
+
+    bot_top_role = guild.get_member(bot.user.id).top_role
+    if not any(role.name == "Muted" for role in guild.roles):
+        log(f"Creating 'Muted' role in guild {guild}")
+        permissions = discord.Permissions(send_messages=False, speak=False)
+        mute_role = await guild.create_role(name="Muted", permissions=permissions)
+        try:
+            if mute_role.position >= bot_top_role.position:
+                raise discord.HTTPException(None, "Role hierarchy issue")
+            await mute_role.edit(position=bot_top_role.position - 1)
+        except discord.HTTPException as e:
+            logw(f"Failed to move 'Muted' role in {guild.name}: {e}")
+            log("Retrying hierarchy adjustment...")
+            bot_controlled_roles = [role for role in guild.roles if role.managed]
+            for role in bot_controlled_roles:
+                if role.position >= bot_top_role.position:
+                    await role.edit(position=bot_top_role.position - 1)
+        for channel in guild.channels:
+            log(f"Setting 'Muted' permissions in guild {guild} channel {channel}")
+            try:
+                await channel.set_permissions(mute_role, send_messages=False, speak=False)
+            except Exception as e:
+                logw(e)
+    if not server_configs.get(str(guild.id)):
+        server_configs[str(guild.id)] = {}
 
 
 def create_restart_script():
@@ -4273,18 +4970,6 @@ if __name__ == "__main__":
     with open("restart_script.py", "w") as f:
         f.write(script_content)
     log("Restart script created.")
-
-
-def register_on_ready_extension(name, data):
-    if not os.path.isfile(f'{plugins_folder}/on_ready_{name}.ext'):
-        with open(f'{plugins_folder}/on_ready_{name}.ext', 'w') as f:
-            f.write(data)
-
-
-def register_on_message_extension(name, data):
-    if not os.path.isfile(f'{plugins_folder}/on_message_{name}.ext'):
-        with open(f'{plugins_folder}/on_message_{name}.ext', 'w') as f:
-            f.write(data)
 
 
 def retry_after_message(t):
