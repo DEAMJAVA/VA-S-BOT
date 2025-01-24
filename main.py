@@ -1,4 +1,4 @@
-current_version = 'V12.3'
+current_version = 'V12.4'
 current_config_format = '18'
 plugins_folder = 'plugins'
 creator_id = '938059286054072371'
@@ -315,14 +315,27 @@ MEMBER_PERMS_GROUP = config['bot_group_name'] + '.' + 'member'
 
 
 class CreateTicketView(discord.ui.View):
-    def __init__(self, bot):
+    def __init__(self, bot, button_message="Create Ticket", emoji="🎟️"):
         super().__init__(timeout=None)
         self.bot = bot
+        self.button_message = button_message
+        self.emoji = emoji
 
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, emoji="🎟️",
-                       custom_id="create_ticket_button")
+    @discord.ui.button(style=discord.ButtonStyle.primary, custom_id="create_ticket_button")
     async def create_ticket(self, button: discord.ui.Button, interaction: discord.Interaction):
         await handle_ticket_creation(interaction, self.bot)
+
+    async def on_timeout(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.label = self.button_message
+                child.emoji = self.emoji
+
+    def update_button(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.label = self.button_message
+                child.emoji = self.emoji
 
 
 class CloseTicketView(discord.ui.View):
@@ -390,22 +403,6 @@ def ttime():
     return time
 
 
-def load_embeds():
-    try:
-        with open("embeds.json", "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-
-def save_embeds(embeds):
-    with open("embeds.json", "w") as f:
-        json.dump(embeds, f, indent=4)
-
-
-embeds = load_embeds()
-
-
 def replace_placeholders(content, user):
     default_icon_url = "https://cdn.discordapp.com/embed/avatars/0.png"
     try:
@@ -422,6 +419,7 @@ def replace_placeholders(content, user):
 
 
 def get_embed(name: str, user):
+    embeds = server_configs.get(str(user.guild.id), {}).get('embeds', {})
     if name not in embeds:
         embed_data = {"title": "", "description":name, "color":0, "fields":[], "footer":"", "image":"", "thumbnail":""}
     else:
@@ -1605,24 +1603,18 @@ async def clear(ctx, target=None, amount: int = None):
 
     if target in ["bots", "bot"]:
         deleted = await limited_purge(lambda msg: msg.author.bot)
-
     elif target in ["users", "user"]:
         deleted = await limited_purge(lambda msg: not msg.author.bot)
-
     elif target:
         try:
             member = await commands.MemberConverter().convert(ctx, target)
-
             deleted = await limited_purge(lambda msg: msg.author == member)
         except commands.BadArgument:
             await ctx.send("User not found.")
             return
-
     else:
         deleted = await ctx.channel.purge(limit=amount, check=check_message_pin)
-
-    response = f'Cleared {len(deleted)} messages. ' + ('By ' if target else None) + target if target else None
-
+    response = f'Cleared {len(deleted)} messages. {f'By {target if target else None}' if target else ''}'
     await ctx.send(response)
 add_help('Moderation', 'clear [target] [amount]', 'clears the chat. in a limited amount if provided. clears messages by spesific user if target is provided')
 
@@ -2282,31 +2274,41 @@ async def si(ctx):
 add_help('General', 'si', 'gives you server information')
 
 
-async def setupmute(ctx):
-    mute_role = None
+async def setupmute(ctx, channel: discord.abc.GuildChannel):
     guild = ctx.guild
     bot_top_role = guild.get_member(ctx.bot.user.id).top_role
+    mute_role = discord.utils.get(guild.roles, name="Muted")
     if mute_role is None:
-        if not any(role.name == "Muted" for role in guild.roles):
-            await ctx.send('creating muted role')
-            permissions = discord.Permissions(send_messages=False, speak=False)
-            mute_role = await guild.create_role(name="Muted", permissions=permissions)
-            await mute_role.edit(position=bot_top_role.position - 3)
-        else:
-            mute_role = discord.utils.get(guild.roles, name='Muted')
+        await ctx.send('Creating muted role...')
+        permissions = discord.Permissions(send_messages=False, speak=False)
+        mute_role = await guild.create_role(name="Muted", permissions=permissions)
+        await mute_role.edit(position=bot_top_role.position - 3)
+    if mute_role in channel.overwrites and channel.overwrites[mute_role].send_messages is False and channel.overwrites[
+        mute_role].speak is False:
+        await ctx.send(f'Muted role is already set up for {channel.mention}.')
+        return mute_role
+    await ctx.send(f'Setting up muted permissions for {channel.mention}...')
+    try:
+        if isinstance(channel, discord.TextChannel):
+            await channel.set_permissions(mute_role, send_messages=False)
+        elif isinstance(channel, discord.VoiceChannel):
+            await channel.set_permissions(mute_role, speak=False)
+    except Exception as e:
+        logw(e)
 
-    for channel in guild.channels:
-        await ctx.send(f'setting up muted permissions for channel {channel}')
-        try:
-            await channel.set_permissions(mute_role, send_messages=False, speak=False)
-        except Exception as e:
-            logw(e)
     return mute_role
 
 @has_required_perm()
 @bot.command(name='setupmute')
-async def setup_mute_command(ctx):
-    await setupmute(ctx)
+async def setup_mute_command(ctx, channel = None):
+    if not channel:
+        channel = str(ctx.channel.id)
+    if channel == 'all':
+        for channel in ctx.guild.channels:
+            await setupmute(ctx, channel)
+    else:
+        channel = ctx.guild.get_channel(int(channel.strip('<#>')))
+        await setupmute(ctx, channel)
 add_help('Moderation', 'setupmute', 'sets up the mute role')
 
 
@@ -2551,7 +2553,6 @@ async def handle_ticket_closure(interaction, bot):
         except discord.errors.NotFound:
             await interaction.followup.send('This command can only be used in a ticket channel.', ephemeral=True)
         return
-
     if not interaction.user.guild_permissions.administrator:
         view = CloseTicketView(interaction)
         await interaction.channel.send(f'{interaction.user.mention} has requested ticket closure request', view=view)
@@ -2564,12 +2565,11 @@ async def handle_ticket_closure(interaction, bot):
         return
 
     try:
-        if interaction.custom_id == 'close_ticket_button' or interaction.custom_id == 'close_request_button':
+        if interaction.custom_id in ['close_ticket_button', 'close_request_button']:
             await interaction.response.send_message('Archiving ticket...')
             await interaction.channel.send(f"{interaction.user.mention} has closed this ticket.")
             ticket_ids[guild_id]['users'].pop(user_id)
             save_ticket_data()
-
             archive_category = discord.utils.get(interaction.guild.categories, name="Archived Tickets")
             if not archive_category:
                 archive_category = await interaction.guild.create_category(name="Archived Tickets")
@@ -2582,7 +2582,16 @@ async def handle_ticket_closure(interaction, bot):
 
             await interaction.channel.edit(category=archive_category, overwrites=overwrites)
             await interaction.channel.send("Ticket archived successfully.")
-            await transcribe_ticket(interaction.channel)
+            transcript_path = await transcribe_ticket(interaction.channel)
+            user = interaction.guild.get_member(int(user_id))
+            if user and server_configs.get(str(interaction.guild.id), {}).get('send_ticket_transcripts', False):
+                try:
+                    with open(transcript_path, "rb") as file:
+                        await user.send("Here is the transcript of your ticket:",
+                                        file=discord.File(file, filename=os.path.basename(transcript_path)))
+                    await interaction.channel.send(f"Transcript has been sent to {user.mention}.")
+                except discord.Forbidden:
+                    await interaction.channel.send(f"Could not DM {user.mention} the transcript. Please enable DMs.")
 
             view = DeleteTicketView(bot)
             await interaction.channel.send("Click the button below to delete this ticket.", view=view)
@@ -2615,24 +2624,64 @@ async def handle_ticket_deletion(interaction):
 
 
 async def transcribe_ticket(channel):
-    if not os.path.exists(f'transcripts/{sanitize_filename(channel.guild.name)}'):
-        os.makedirs(f'transcripts/{sanitize_filename(channel.guild.name)}')
-
-    transcript = [f"Transcript for channel: #{channel.name}", f"Channel ID: {channel.id}",
-                  f"Created at: {channel.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "=" * 50]
-
+    guild_folder = f'transcripts/{sanitize_filename(channel.guild.name)}'
+    if not os.path.exists(guild_folder):
+        os.makedirs(guild_folder)
+    transcript = []
+    transcript.append(f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Transcript - #{channel.name}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; background-color: #36393f; color: white; padding: 20px; }}
+            .message {{ display: flex; align-items: flex-start; margin-bottom: 10px; }}
+            .avatar {{ width: 40px; height: 40px; border-radius: 50%; margin-right: 10px; }}
+            .content {{ background: #40444b; padding: 10px; border-radius: 8px; max-width: 80%; }}
+            .timestamp {{ font-size: 12px; color: #b9bbbe; margin-left: 5px; }}
+            .mention {{ color: #7289da; background: rgba(114, 137, 218, 0.1); padding: 2px 4px; border-radius: 4px; }}
+            .mention.role {{ color: #faa61a; }}
+            .mention.channel {{ color: #44b07b; }}
+        </style>
+    </head>
+    <body>
+        <h2>Transcript for #{channel.name}</h2>
+        <p>Channel ID: {channel.id}</p>
+        <p>Created at: {channel.created_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <hr>
+    """)
     async for message in channel.history(oldest_first=True):
         timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S')
-        transcript.append(f"[{timestamp}] {message.author.name}: {message.content}")
-        transcript.append("-" * 50)
-
-    transcript.append("=" * 50)
-    transcript.append(f"End of transcript for channel: #{channel.name}")
-
-    filename = f"{channel.name}-{channel.id}.txt"
-    with open(os.path.join('transcripts', sanitize_filename(channel.guild.name), filename), "w", encoding="utf-8") as f:
+        avatar_url = message.author.avatar.url if message.author.avatar else message.author.default_avatar.url
+        content = format_mentions(message)
+        transcript.append(f"""
+        <div class="message">
+            <img class="avatar" src="{avatar_url}" alt="Avatar">
+            <div>
+                <strong>{message.author.name}</strong> <span class="timestamp">{timestamp}</span>
+                <div class="content">{content}</div>
+            </div>
+        </div>
+        """)
+    transcript.append("</body></html>")
+    filename = f"{channel.name}-{channel.id}.html"
+    file_path = os.path.join(guild_folder, filename)
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write("\n".join(transcript))
+    return file_path
 
+
+def format_mentions(message):
+    content = message.content
+    for user in message.mentions:
+        content = content.replace(f"<@{user.id}>", f'<span class="mention">@{user.name}</span>')
+    for role in message.role_mentions:
+        content = content.replace(f"<@&{role.id}>", f'<span class="mention role">@{role.name}</span>')
+    for channel in message.channel_mentions:
+        content = content.replace(f"<#{channel.id}>", f'<span class="mention channel">#{channel.name}</span>')
+    return content
 
 
 async def send_close_request(user, ticket_channel):
@@ -2654,11 +2703,13 @@ ticket_commands = bot.create_group(name='ticket')
 
 @ticket_commands.command(name='setup-ticket-system', description='Sets up the ticket system in a specified channel.')
 @has_required_perm()
-async def setup_ticket_system(ctx, message=None):
+async def setup_ticket_system(ctx, message=None, emoji="🎟️", button_message="Create Ticket"):
     channel = ctx.channel
     if message is None:
         message = "Click the button below to create a ticket."
-    await channel.send(message, view=CreateTicketView(bot))
+    view = CreateTicketView(ctx.bot, button_message=button_message, emoji=emoji)
+    view.update_button()
+    await channel.send(message, view=view)
     await ctx.respond(content=f'Ticket system setup in {channel.mention}', ephemeral=True)
     logcommand(message=ctx, command="setup-ticket-system")
 
@@ -2676,6 +2727,16 @@ async def setup_ticket_ping(ctx, role: discord.Role):
     save_server_configs(server_configs)
     await ctx.respond("Ticket handler defined successfully", ephemeral=True)
     logcommand(message=ctx, command="setup-ticket-handler")
+
+
+@ticket_commands.command(name='send-ticket-transcripts', description='toggles weather to send ticket trnscripts to users or not')
+@has_required_perm()
+async def setup_ticket_transcript(ctx, arg: bool):
+    server_id = str(ctx.guild.id)
+    server_configs.setdefault(server_id, {})['send_ticket_transcripts'] = arg
+    save_server_configs(server_configs)
+    await ctx.respond(f"Sending ticket transcripts to users is now {arg}", ephemeral=True)
+    logcommand(message=ctx, command="send-ticket-transcripts")
 
 
 @ticket_commands.command(name='set-ticket-message', description='Sets the message sent in tickets')
@@ -2714,7 +2775,7 @@ async def ticket_add(ctx: discord.ApplicationContext, user: discord.Member):
 
 @ticket_commands.command(name='remove', description='Add a user to the current ticket.')
 @has_required_perm()
-async def ticket_add(ctx: discord.ApplicationContext, user: discord.Member):
+async def ticket_remove(ctx: discord.ApplicationContext, user: discord.Member):
     if not ctx.channel.name.startswith('ticket-'):
         await ctx.respond('This command can only be used in a ticket channel.', ephemeral=True)
         return
@@ -2854,11 +2915,6 @@ async def transcribe_ticket_command(ctx, silent: bool = False):
     if not silent:
         await ctx.channel.send(f"Transcribed ticket {ctx.channel.name}")
     logcommand(message=ctx, command="transcribe")
-
-@ticket_commands.command(name='set-logs-channel', description='Sets the log channel for tickets')
-@has_required_perm()
-async def setup_ticket_log_channel(ctx, channel: discord.TextChannel):
-    logcommand(message=ctx, command="set-logs-chnnel")
 
 
 afk_file = 'afk_users.json'
@@ -3374,6 +3430,7 @@ add_help('Moderation', 'embed <create/edit/addfield/deletefield/editfield/setcol
 @has_required_perm()
 @embed.command(name='create')
 async def create_embed(ctx, name: str = None, *, content: str = None):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if not name:
         return await ctx.send('Please provide a name')
     if name in embeds:
@@ -3392,14 +3449,16 @@ async def create_embed(ctx, name: str = None, *, content: str = None):
         "image": "",
         "thumbnail": ""
     }
-    embeds[name] = embed_dict
-    save_embeds(embeds)
-    await ctx.send(f"Embed `{name}` has been created.")
+    server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name] = embed_dict
+    save_server_configs(server_configs)
+    embed = get_embed(name, ctx.author)
+    await ctx.send(f"Embed `{name}` has been created.", embed=embed)
 
 
 @has_required_perm()
 @embed.command(name='edit')
 async def edit_embed(ctx, name: str = None, field: str = None, *, value: str = None):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if not name or not field or not value:
         return await ctx.send("Please provide name field and value")
 
@@ -3411,34 +3470,39 @@ async def edit_embed(ctx, name: str = None, field: str = None, *, value: str = N
         await ctx.send("You can only edit `title`, `description`, or `footer` with this command.")
         return
 
-    embeds[name][field] = value
-    save_embeds(embeds)
-    await ctx.send(f"Embed `{name}` has been updated: {field} set to `{value}`.")
+    server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name][field] = value
+    save_server_configs(server_configs)
+    embed = get_embed(name, ctx.author)
+    await ctx.send(f"Embed `{name}` has been updated: {field} set to `{value}`.", embed=embed)
 
 
 @has_required_perm()
 @embed.command(name='addfield')
 async def add_field(ctx, name: str, title: str, value: str, inline: bool = False):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
 
-    embeds[name]["fields"].append({"name": title, "value": value, "inline": inline})
-    save_embeds(embeds)
-    await ctx.send(f"Field added to embed `{name}`.")
+    server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name]["fields"].append({"name": title, "value": value, "inline": inline})
+    save_server_configs(server_configs)
+    embed = get_embed(name, ctx.author)
+    await ctx.send(f"Field added to embed `{name}`.", embed=embed)
 
 
 @has_required_perm()
 @embed.command(name='delfield')
 async def delete_field(ctx, name: str, index: int):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
 
     try:
-        removed_field = embeds[name]["fields"].pop(index)
-        save_embeds(embeds)
-        await ctx.send(f"Field `{removed_field['name']}` has been removed from embed `{name}`.")
+        server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name]["fields"].pop(index)
+        save_server_configs(server_configs)
+        embed = get_embed(name, ctx.author)
+        await ctx.send(f"Field `{embeds['name']}` has been removed from embed `{name}`.", embed=embed)
     except IndexError:
         await ctx.send("Invalid field index. Please check the embed and try again.")
 
@@ -3446,12 +3510,13 @@ async def delete_field(ctx, name: str, index: int):
 @has_required_perm()
 @embed.command(name='editfield')
 async def edit_field(ctx, name: str, index: int, title: str = None, value: str = None, inline: bool = None):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
 
     try:
-        field = embeds[name]["fields"][index]
+        field = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})[name]["fields"][index]
         if title is not None:
             field["name"] = title
         if value is not None:
@@ -3459,8 +3524,9 @@ async def edit_field(ctx, name: str, index: int, title: str = None, value: str =
         if inline is not None:
             field["inline"] = inline
 
-        save_embeds(embeds)
-        await ctx.send(f"Field at index `{index}` in embed `{name}` has been updated.")
+        save_server_configs(server_configs)
+        embed = get_embed(name, ctx.author)
+        await ctx.send(f"Field at index `{index}` in embed `{name}` has been updated.", embed=embed)
     except IndexError:
         await ctx.send("Invalid field index. Please check the embed and try again.")
 
@@ -3468,6 +3534,7 @@ async def edit_field(ctx, name: str, index: int, title: str = None, value: str =
 @has_required_perm()
 @embed.command(name='setcolor')
 async def set_color_embed(ctx, name: str, color: str):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
@@ -3475,9 +3542,10 @@ async def set_color_embed(ctx, name: str, color: str):
     try:
         if color.startswith("#"):
             color = color[1:]
-        embeds[name]["color"] = int(color, 16)
-        save_embeds(embeds)
-        await ctx.send(f"Color updated for embed `{name}`.")
+        server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name]["color"] = int(color, 16)
+        save_server_configs(server_configs)
+        embed = get_embed(name, ctx.author)
+        await ctx.send(f"Color updated for embed `{name}`.", embed=embed)
     except ValueError:
         await ctx.send("Invalid color code. Please provide a valid hexadecimal color (e.g., #3498db).")
 
@@ -3485,6 +3553,7 @@ async def set_color_embed(ctx, name: str, color: str):
 @has_required_perm()
 @embed.command(name='setimage')
 async def set_image_embed(ctx, name: str, image: str = ""):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
@@ -3492,9 +3561,10 @@ async def set_image_embed(ctx, name: str, image: str = ""):
     try:
         if image in ['none', 'null']:
             image = ""
-        embeds[name]["image"] = image
-        save_embeds(embeds)
-        await ctx.send(f"Image updated for embed `{name}`.")
+        server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name]["image"] = image
+        save_server_configs(server_configs)
+        embed = get_embed(name, ctx.author)
+        await ctx.send(f"Image updated for embed `{name}`.", embed=embed)
     except ValueError:
         await ctx.send("Invalid color code. Please provide a valid hexadecimal color (e.g., #3498db).")
 
@@ -3502,6 +3572,7 @@ async def set_image_embed(ctx, name: str, image: str = ""):
 @has_required_perm()
 @embed.command(name='setthumbnail')
 async def set_thumbnail_embed(ctx, name: str, thumbnail: str = ""):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
@@ -3509,9 +3580,10 @@ async def set_thumbnail_embed(ctx, name: str, thumbnail: str = ""):
     try:
         if thumbnail in ['none', 'null']:
             thumbnail = ""
-        embeds[name]["thumbnail"] = thumbnail
-        save_embeds(embeds)
-        await ctx.send(f"Thmbnail updated for embed `{name}`.")
+        server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name]["thumbnail"] = thumbnail
+        save_server_configs(server_configs)
+        embed = get_embed(name, ctx.author)
+        await ctx.send(f"Thmbnail updated for embed `{name}`.", embed=embed)
     except ValueError:
         await ctx.send("Invalid color code. Please provide a valid hexadecimal color (e.g., #3498db).")
 
@@ -3519,12 +3591,13 @@ async def set_thumbnail_embed(ctx, name: str, thumbnail: str = ""):
 @has_required_perm()
 @embed.command(name='delete')
 async def delete_embed(ctx, name: str):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     if name not in embeds:
         await ctx.send(f"No embed found with the name `{name}`.")
         return
 
-    del embeds[name]
-    save_embeds(embeds)
+    del server_configs.setdefault(str(ctx.guild.id), {}).setdefault('embeds', {})[name]
+    save_server_configs(server_configs)
     await ctx.send(f"Embed `{name}` has been deleted.")
 
 
@@ -3539,6 +3612,7 @@ async def send_embed(ctx, *,name: str):
 @has_required_perm()
 @embed.command(name='list')
 async def list_embeds(ctx):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     try:
         embed_list = ', '.join(embeds) if embeds else "No embeds available."
 
@@ -3580,6 +3654,7 @@ add_help('Moderation', 'rmwelcomechannel', 'removes the defined welcome message 
 @has_required_perm()
 @bot.command(name='setwelcomeembed')
 async def def_welcome_embed(ctx, *, name:str = None):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     server_id = str(ctx.guild.id)
     if not name in embeds:
         await ctx.send('No embed of that name exists')
@@ -3627,6 +3702,7 @@ add_help('Moderation', 'rmleavechannel', 'removes the defined leave message chan
 @has_required_perm()
 @bot.command(name='setleaveembed')
 async def def_leave_embed(ctx, *, name:str = None):
+    embeds = server_configs.get(str(ctx.guild.id), {}).get('embeds', {})
     server_id = str(ctx.guild.id)
     if not name in embeds:
         await ctx.send('No embed of that name exists')
@@ -4202,7 +4278,7 @@ add_help('Moderation', 'chatcooldown cooldownmin <seconds>', 'sets the minimum c
 @has_required_perm()
 @bot.group('levelrewards', invoke_without_command=True)
 async def levelrewards(ctx):
-    await ctx.send('Please use valid subcommand enable/disable, add <message amount> <role>, remove <message count>')
+    await ctx.send('Please use valid subcommand enable/disable, add <message amount> <role>, remove <message count>, exclude')
 add_help('Moderation', 'levelrewards', 'command to setup levelrewards in the server')
 
 
@@ -4224,10 +4300,97 @@ async def level_rewards_disable(ctx):
 
 @has_required_perm()
 @levelrewards.command(name='add')
-async def level_rewards_disable(ctx, message_count: str = 10, role: discord.Role = None):
+async def level_rewards_add(ctx, message_count: str = 10, role: discord.Role = None):
     server_configs.setdefault(str(ctx.guild.id), {}).setdefault('level_reward_roles', {})[message_count] = role.id
     save_server_configs(server_configs)
-    await ctx.send('Level rewards enabled')
+    await ctx.send(f'Level reward added! Members will receive the {role.mention} role at **{message_count}** messages.')
+
+
+@has_required_perm()
+@levelrewards.command(name='exclude')
+async def level_rewards_exclude(ctx):
+    if ctx.channel.id in server_configs.get(str(ctx.guild.id), {}).get('level_reward_excluded', []):
+        server_configs.setdefault(str(ctx.guild.id), {}).setdefault('level_reward_excluded', []).remove(ctx.channel.id)
+        return await ctx.send(f'{ctx.channel.mention} has been re-included in level rewards')
+    server_configs.setdefault(str(ctx.guild.id), {}).setdefault('level_reward_excluded', []).append(ctx.channel.id)
+    save_server_configs(server_configs)
+    await ctx.send(f'{ctx.channel.mention} has been excluded from level rewards')
+
+
+@bot.command(name='levels')
+async def levels(ctx):
+    guild_id = str(ctx.guild.id)
+    level_rewards = server_configs.get(guild_id, {}).get('level_reward_roles', {})
+    if not level_rewards:
+        return await ctx.send("No level rewards configured for this server.")
+    embed = discord.Embed(title="Level Rewards", color=discord.Color.blue())
+    for message_count, role_id in sorted(level_rewards.items(), key=lambda x: int(x[0])):
+        role = ctx.guild.get_role(role_id)
+        if role:
+            embed.add_field(name=f"{message_count} Messages", value=role.mention, inline=False)
+    await ctx.send(embed=embed)
+add_help('General', 'levels', 'lists all the available levels in the server')
+
+
+@bot.command(name='level')
+async def level(ctx, user: discord.Member = None):
+    guild_id = str(ctx.guild.id)
+    user = user if user else ctx.author
+    user_id = str(user.id)
+    if server_configs.get(guild_id, {}).get('level_rewards', False):
+        user_messages = server_configs.get(guild_id, {}).get('user_messages', {}).get(user_id, 0)
+        embed = discord.Embed(title=f"{user.display_name}'s Level", color=discord.Color.green())
+        embed.add_field(name="Total Messages", value=str(user_messages), inline=False)
+        level_rewards = server_configs.get(guild_id, {}).get('level_reward_roles', {})
+        if level_rewards:
+            current_level = max((int(level) for level in level_rewards if int(level) <= user_messages), default=0)
+            next_level = min((int(level) for level in level_rewards if int(level) > user_messages), default=None)
+            if current_level:
+                current_role = ctx.guild.get_role(level_rewards[str(current_level)])
+                if current_role:
+                    embed.add_field(name="Current Level",
+                                    value=f"{current_role.mention} (Reached at {current_level} messages)", inline=False)
+            if next_level:
+                next_role = ctx.guild.get_role(level_rewards[str(next_level)])
+                if next_role:
+                    embed.add_field(name="Next Reward", value=f"{next_role.mention} at {next_level} messages!",
+                                    inline=False)
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send('Level rewards are not enabled in this server.')
+add_help('General', 'level', 'know your current level, if level rewards are setup in the server')
+
+
+@has_required_perm()
+@bot.command(name='reactionroles')
+async def setup_reactionrole(ctx, emoji: str = None, role: discord.Role = None, message_reference: str = None):
+    reaction_roles = server_configs.get(str(ctx.guild.id), {}).get('reaction_roles', {})
+    try:
+        if ctx.message.reference:
+            message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        else:
+            match = re.search(r'/(\d+)/(\d+)/(\d+)', message_reference)
+            if not match:
+                await ctx.send("Invalid message reference. Please reply to a message or provide a valid link.")
+                return
+            guild_id, channel_id, message_id = map(int, match.groups())
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                await ctx.send("Couldn't find the channel. Make sure the bot has access.")
+                return
+            message = await channel.fetch_message(message_id)
+        if not emoji or not role:
+            await ctx.send("Usage: Reply to a message OR use a link, then specify an emoji and a role mention.")
+            return
+        if str(message.id) not in reaction_roles:
+            reaction_roles[str(message.id)] = {}
+        server_configs.setdefault(str(ctx.guild.id), {}).setdefault('reaction_roles', {}).setdefault(str(message.id), {})[emoji] = role.id
+        save_server_configs(server_configs)
+        await message.add_reaction(emoji)
+        await ctx.send(f"Reaction role set: {emoji} → {role.name} on message {message.jump_url}")
+    except Exception as e:
+        await ctx.send(f"Error: {e}")
+add_help('Moderation', 'reactionrole <emoji> <role mention> <message link or message reply>', 'sets up a reaction role')
 
 
 bot.remove_command('help')
@@ -4380,6 +4543,32 @@ async def process_responses(message, responses):
 
 
 @bot.event
+async def on_raw_reaction_add(payload):
+    reaction_roles = server_configs.get(str(payload.guild_id), {}).get('reaction_roles', {})
+    if str(payload.message_id) in reaction_roles:
+        guild = bot.get_guild(payload.guild_id)
+        role_id = reaction_roles[str(payload.message_id)].get(str(payload.emoji))
+        if role_id:
+            role = guild.get_role(role_id)
+            member = guild.get_member(payload.user_id)
+            if role and member:
+                await member.add_roles(role)
+
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    reaction_roles = server_configs.get(str(payload.guild_id), {}).get('reaction_roles', {})
+    if str(payload.message_id) in reaction_roles:
+        guild = bot.get_guild(payload.guild_id)
+        role_id = reaction_roles[str(payload.message_id)].get(str(payload.emoji))
+        if role_id:
+            role = guild.get_role(role_id)
+            member = guild.get_member(payload.user_id)
+            if role and member:
+                await member.remove_roles(role)
+
+
+@bot.event
 async def on_voice_state_update(member: discord.Member, before, after):
     global guild_vcs, personal_vcs
     guild_id = str(member.guild.id)
@@ -4521,6 +4710,8 @@ message_log={}
 
 @when_message
 async def func_chat_cooldown(message):
+    if isinstance(message.channel, discord.DMChannel):
+        return
     guild_id = str(message.channel.guild.id)
     TRACKED_CHANNELS = server_configs.get(guild_id, {}).get('cooldown_channels', [])
     MESSAGE_WINDOW = server_configs.get(guild_id, {}).get('cooldown_message_window', 10 )
@@ -4564,6 +4755,8 @@ async def level_rewards_engine(message):
     user_id = str(message.author.id)
 
     if not server_configs.get(guild_id, {}).get('level_rewards', False):
+        return
+    if message.channel.id in server_configs.get(guild_id, {}).get('level_reward_excluded', []):
         return
     server_configs.setdefault(guild_id, {}).setdefault('user_messages', {})
     server_configs[guild_id]['user_messages'][user_id] = server_configs[guild_id]['user_messages'].get(user_id, 0) + 1
@@ -4863,6 +5056,7 @@ async def on_ready():
     bot.add_view(CreateTicketView(bot))
     bot.add_view(CloseTicketView(bot))
     bot.add_view(CloseTicketRequestView(bot))
+    bot.add_view(DeleteTicketView(bot))
 
     log(f'Logged in as {bot.user} (ID: {bot.user.id})')
 
