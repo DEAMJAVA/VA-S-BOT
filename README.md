@@ -1,3 +1,6 @@
+# DISCONTINUED!!!
+switched to [PyBot](https://github.com/DEAMAJVA/PyBot/)
+
 # VA'S-BOT
 <b>NOT UPDATED ANYMORE</b>
 A Moderation Bot for Discord
