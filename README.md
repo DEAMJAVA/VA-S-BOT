@@ -1,5 +1,5 @@
 # DISCONTINUED!!!
-switched to [PyBot](https://github.com/DEAMAJVA/PyBot/)
+switched to [PyBot](https://github.com/DEAMJAVA/PyBot/)
 
 # VA'S-BOT
 <b>NOT UPDATED ANYMORE</b>
